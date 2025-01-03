@@ -89,6 +89,8 @@ WIA3300-10)
 	;;
 G-AX1800)
 	LOGO=fcj.png
+KOMI-A8)
+	LOGO=konka.png
 * )
 	LOGO=asus_logo.png
 	;;
