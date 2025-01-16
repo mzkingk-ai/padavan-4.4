@@ -1,6 +1,6 @@
-SRC_NAME=json-c-0.17
-SRC_URL=https://s3.amazonaws.com/json-c_releases/releases/json-c-0.17.tar.gz
-ARCHIVE_NAME=json-c-0.17
+SRC_NAME=json-c-0.18
+SRC_URL=https://s3.amazonaws.com/json-c_releases/releases/json-c-0.18.tar.gz
+ARCHIVE_NAME=json-c-0.18
 
 all: download_test extract_test config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME)/build
