@@ -1,5 +1,5 @@
-SRC_NAME=libxml2-2.13.8
-SRC_URL=https://github.com/GNOME/libxml2/archive/refs/tags/v2.13.8.tar.gz
+SRC_NAME=libxml2-2.14.4
+SRC_URL=https://github.com/GNOME/libxml2/archive/refs/tags/v2.14.4.tar.gz
 
 all: download_test extract_test config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME)
