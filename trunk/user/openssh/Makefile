@@ -1,4 +1,4 @@
-SRC_NAME=openssh-9.7p1
+SRC_NAME=openssh-9.9p2
 SRC_URL=https://mirror.yandex.ru/pub/OpenBSD/OpenSSH/portable/$(SRC_NAME).tar.gz
 
 CFLAGS += -ffunction-sections -fdata-sections
@@ -7,6 +7,7 @@ LDFLAGS += -Wl,--gc-sections
 THISDIR = $(shell pwd)
 
 all: download_test extract_test config_test
+#all: config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME)
 
 download_test:
@@ -18,7 +19,6 @@ extract_test:
 	( if [ ! -d $(SRC_NAME) ]; then \
 		tar xzf $(SRC_NAME).tar.gz; \
 		patch -d $(SRC_NAME) -p1 -i ../openssh-orig.patch; \
-		patch -d $(SRC_NAME) -p1 -i ../ability-to-flash-from-prometheus.patch; \
 	fi )
 
 config_test:
@@ -63,15 +63,16 @@ clean:
 	rm -f config_done
 
 romfs:
+	mkdir -p $(INSTALLDIR)/usr/libexec
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_OPENSSH),y)
 	mkdir -p $(INSTALLDIR)/etc_ro/ssh
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/moduli /etc_ro/ssh/moduli
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/libssh.so /lib/libssh.so
+	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/sshd-session /usr/libexec/sshd-session
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/scp /usr/bin/scp
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/ssh /usr/bin/ssh
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/ssh-keygen /usr/bin/ssh-keygen
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/sshd /usr/sbin/sshd
 	$(ROMFSINST) -p +x /usr/bin/sshd.sh
 endif
-	mkdir -p $(INSTALLDIR)/usr/libexec
 	$(ROMFSINST) $(THISDIR)/$(SRC_NAME)/sftp-server /usr/libexec/sftp-server
