@@ -12,6 +12,7 @@ download_test:
 extract_test:
 	( if [ ! -d $(SRC_NAME) ]; then \
 		tar -xf $(SRC_NAME).tar.gz; \
+		mv mbedtls-mbedtls-2.28.10 $(SRC_NAME);\
 	fi )
 
 config_test:
