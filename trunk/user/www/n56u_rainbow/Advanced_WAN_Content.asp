@@ -740,7 +740,6 @@ var client_mac = login_mac_str();
 			}
 			if (code == "")
 				code = '<div style="text-align: center;" onclick="hideClients_Block();"><#Nodata#></div>';
-			code += '<!--[if lte IE 6.5]><iframe class="hackiframe2"></iframe><![endif]-->';
 			$("ClientList_Block").innerHTML = code;
 		}
 
