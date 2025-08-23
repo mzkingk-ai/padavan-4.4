@@ -10,6 +10,13 @@
 	compatible = "mediatek,mt7621-soc";
 	model = "Ruijie EW1800GX Pro";
 
+	aliases {
+		led-boot = &led_status;
+		led-failsafe = &led_status;
+		led-running = &led_status;
+		led-upgrade = &led_status;
+	};
+	
 	chosen {
 		bootargs = "console=ttyS0,115200";
 	};
@@ -19,19 +26,17 @@
 
 		led_status: status {
 			label = "status:blue";
-			gpios = <&gpio 8 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
 		};
 
 		led_green: green {
 			label = "status:green";
-			gpios = <&gpio 6 GPIO_ACTIVE_LOW>;
-			default-state = "off";
+			gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
 		};
 
 		led_red: red {
 			label = "status:red";
-			gpios = <&gpio 7 GPIO_ACTIVE_LOW>;
-			default-state = "off";
+			gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;
 		};
 	};
 
@@ -49,7 +54,7 @@
 		
 		wps {
 			label = "wps";
-			gpios = <&gpio 16 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_WPS_BUTTON>;
 		};
 	};
