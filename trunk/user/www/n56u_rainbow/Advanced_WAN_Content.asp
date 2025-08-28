@@ -744,14 +744,14 @@ var client_mac = login_mac_str();
 		}
 
 		function hideClients_Block() {
-			$j("#chevron").children('i').removeClass('icon-chevron-up').addClass('icon-chevron-down');
+			$j("#chevron").children('i').removeClass('if-btn-up').addClass('if-btn-down');
 			$('ClientList_Block').style.display = 'none';
 			isMenuopen = 0;
 		}
 
 		function pullLANIPList(obj) {
 			if (isMenuopen == 0) {
-				$j(obj).children('i').removeClass('icon-chevron-down').addClass('icon-chevron-up');
+				$j(obj).children('i').removeClass('if-btn-down').addClass('if-btn-up');
 				$("ClientList_Block").style.display = 'block';
 				document.form.pppoemwan_mac_x_0.focus();
 				isMenuopen = 1;
@@ -852,7 +852,7 @@ var client_mac = login_mac_str();
 				}
 				code += '<tr>';
 				code += '<td colspan="4">&nbsp;</td>'
-				code += '<td><button class="btn btn-danger" type="submit" onclick="markGroupMDHCP(this, 64, \' Del \');" name="pppoemwanIPList"><i class="icon icon-minus icon-white"></i></button></td>';
+				code += '<td><button class="btn btn-danger" type="submit" onclick="markGroupMDHCP(this, 64, \' Del \');" name="pppoemwanIPList"><i class="if if-btn-minus"></i></button></td>';
 				code += '</tr>'
 			}
 			code += '</table>';
@@ -1416,35 +1416,35 @@ var client_mac = login_mac_str();
 													<th width="25%">
 														<#LANHostConfig_ManualMac_itemname#>
 															<a href="javascript:sortbyMAC();" style="outline:0;">
-																<i class="icon-circle-arrow-down">
+																<i class="if if-th-sort">
 																</i>
 															</a>
 													</th>
 													<th width="25%">
 														<#LANHostConfig_ManualIP_itemname#>
 															<a href="javascript:sortbyIP();" style="outline:0;">
-																<i class="icon-circle-arrow-down">
+																<i class="if if-th-sort">
 																</i>
 															</a>
 													</th>
 													<th width="25%">
 														<#LANHostConfig_ManualName_itemname#>
 															<a href="javascript:sortbyName();" style="outline:0;">
-																<i class="icon-circle-arrow-down">
+																<i class="if if-th-sort"">
 																</i>
 															</a>
 													</th>
 													<th width="20%">
 														出口序号(1开始)
 														<a href="javascript:sortbyName();" style="outline:0;">
-															<i class="icon-circle-arrow-down">
+															<i class="if if-th-sort"">
 															</i>
 														</a>
 													</th>
 													<th width="5%">
 														<center>
 															<a href="javascript:sortbyId();" style="outline:0;">
-																<i class="icon-th-list">
+																<i class="if if-th-list">
 																</i>
 															</a>
 														</center>
@@ -1464,7 +1464,7 @@ var client_mac = login_mac_str();
 															<button class="btn btn-chevron" id="chevron" type="button"
 																onclick="pullLANIPList(this);"
 																title="Select the MAC of LAN clients.">
-																<i class="icon icon-chevron-down">
+																<i class="if if-btn-down">
 																</i>
 															</button>
 														</div>
@@ -1491,7 +1491,7 @@ var client_mac = login_mac_str();
 														<button class="btn" style="max-width: 219px" type="submit"
 															onclick="markGroupMDHCP(this, 64, ' Add ');"
 															name="ManualDHCPList2" value="<#CTL_add#>" size="12">
-															<i class="icon icon-plus">
+															<i class="if if-btn-plus">
 															</i>
 														</button>
 													</td>
