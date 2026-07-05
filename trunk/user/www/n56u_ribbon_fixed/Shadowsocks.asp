@@ -78,11 +78,21 @@
 			document.getElementById('s5_aut').value=0;
 			}
 			}); 
-			$j("#v2_tls").change(function() { 
-			if(document.getElementById('v2_tls').value != '0'){
-			showhide_div('row_tj_tls_host', 1);
-			}else{			
-			showhide_div('row_tj_tls_host', 0);
+			$j("#v2_tls").change(function() {
+			var tls_val = document.getElementById('v2_tls').value;
+			if(tls_val != '0'){
+				showhide_div('row_tj_tls_host', 1);
+			}else{
+				showhide_div('row_tj_tls_host', 0);
+			}
+			if(tls_val == '3'){ // reality
+				showhide_div('row_reality_pubkey', 1);
+				showhide_div('row_reality_shortid', 1);
+				showhide_div('row_reality_fingerprint', 1);
+			}else{
+				showhide_div('row_reality_pubkey', 0);
+				showhide_div('row_reality_shortid', 0);
+				showhide_div('row_reality_fingerprint', 0);
 			}
 			});
 			$j("#v2_mux").change(function() { 
@@ -785,6 +795,9 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 				document.getElementById("v2_flow").value = getProperty(ss, 'flow', '0');
 				//document.getElementById("v2_tls").checked =  document.getElementById("v2_tls").value != 0;
 				document.getElementById("ssp_tls_host").value = getProperty(ss, 'tls_host', '');
+				document.getElementById("ssp_reality_pubkey").value = getProperty(ss, 'public_key', '');
+				document.getElementById("ssp_reality_shortid").value = getProperty(ss, 'short_id', '');
+				document.getElementById("ssp_reality_fingerprint").value = getProperty(ss, 'fingerprint', '');
 				if (transport == "kcp") {
 					document.getElementById("v2_kcp_guise").value = getProperty(ss, 'kcp_guise', 'none');
 					document.getElementById("v2_mtu").value = getProperty(ss, 'mtu', '');
@@ -1215,10 +1228,38 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 				if (queryParam.security == "tls") {
 					document.getElementById('v2_tls').value = '1';
 					document.getElementById('v2_flow').value = '0';
-					//document.getElementById('v2_tls').checked = true;
 					document.getElementById('ssp_insecure').value = 0;
 					document.getElementById('ssp_insecure').checked = false;
 					document.getElementById('ssp_tls_host').value = queryParam.sni || serverPart[0];
+				}
+				if (queryParam.security == "reality") {
+					document.getElementById('v2_tls').value = '3';
+					if (queryParam.flow != undefined) {
+						if(queryParam.flow == 'xtls-rprx-direct'){
+							document.getElementById('v2_flow').value = '1';
+						}
+						else if(queryParam.flow == 'xtls-rprx-splice'){
+							document.getElementById('v2_flow').value = '2';
+						}
+						else if(queryParam.flow == 'xtls-rprx-vision'){
+							document.getElementById('v2_flow').value = '3';
+						}
+						else
+						{
+							document.getElementById('v2_flow').value = '0';
+						}
+					}
+					else
+					{
+						document.getElementById('v2_flow').value = '1';
+					}
+					document.getElementById('ssp_insecure').value = 0;
+					document.getElementById('ssp_insecure').checked = false;
+					document.getElementById('ssp_tls_host').value = queryParam.sni || serverPart[0];
+					document.getElementById('ssp_reality_pubkey').value = queryParam.pbk || '';
+					document.getElementById('ssp_reality_shortid').value = queryParam.sid || '';
+					document.getElementById('ssp_reality_fingerprint').value = queryParam.fp || '';
+					document.getElementById('v2_tls').dispatchEvent(event);
 				}
 
 				if (queryParam.type == "ws") {
@@ -1256,6 +1297,36 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 					document.getElementById('ssp_insecure').value = 0;
 					document.getElementById('ssp_insecure').checked = false;
 					document.getElementById('ssp_tls_host').value = queryParam.sni || serverPart[0];
+
+				if (queryParam.security == "reality") {
+					document.getElementById('v2_tls').value = '3';
+					if (queryParam.flow != undefined) {
+					    if(queryParam.flow == 'xtls-rprx-direct'){
+					    	document.getElementById('v2_flow').value = '1';
+					    }
+					    else if(queryParam.flow == 'xtls-rprx-splice'){
+					    	document.getElementById('v2_flow').value = '2';
+					    }
+					    else if(queryParam.flow == 'xtls-rprx-vision'){
+					    	document.getElementById('v2_flow').value = '3';
+					    }
+					    else
+					    {
+					    	document.getElementById('v2_flow').value = '0';
+					    }
+					}
+					else
+					{
+					    document.getElementById('v2_flow').value = '1';
+					}
+					document.getElementById('ssp_insecure').value = 0;
+					document.getElementById('ssp_insecure').checked = false;
+					document.getElementById('ssp_tls_host').value = queryParam.sni || serverPart[0];
+					document.getElementById('ssp_reality_pubkey').value = queryParam.pbk || '';
+					document.getElementById('ssp_reality_shortid').value = queryParam.sid || '';
+					document.getElementById('ssp_reality_fingerprint').value = queryParam.fp || '';
+					document.getElementById('v2_tls').dispatchEvent(event);
+				}
 				}
 				s.innerHTML = "<font color='green'>导入Xray配置信息成功</font>";
 				return false;
@@ -1374,6 +1445,9 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 					tls: document.getElementById("v2_tls").value,
 					flow: document.getElementById("v2_flow").value,
 					tls_host: document.getElementById("ssp_tls_host").value,
+					public_key: document.getElementById("ssp_reality_pubkey").value,
+					short_id: document.getElementById("ssp_reality_shortid").value,
+					fingerprint: document.getElementById("ssp_reality_fingerprint").value,
 					coustom: "1",
 				}
 				if (document.getElementById("v2_transport").value == "kcp") {
@@ -1407,6 +1481,9 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 					insecure: document.getElementById("ssp_insecure").value,
 					tls: document.getElementById("v2_tls").value,
 					tls_host: document.getElementById("ssp_tls_host").value,
+					public_key: document.getElementById("ssp_reality_pubkey").value,
+					short_id: document.getElementById("ssp_reality_shortid").value,
+					fingerprint: document.getElementById("ssp_reality_fingerprint").value,
 					coustom: "1",
 				}
 			} else if (type == "socks5") {
@@ -2169,30 +2246,50 @@ setTimeout('document.getElementById("btn_ctime").style.display="none";',1000);
 															</td>
 														</tr>
 														<tr id="row_v2_tls" style="display:none;">
-															<th width="50%">TLS/XTLS</th>
+															<th width="50%">TLS/XTLS/REALITY</th>
 															<td>
 																<select name="v2_tls" id="v2_tls" class="input" style="width: 200px;">
 																	<option value="0">未配置</option>
 																	<option value="1">tls</option>
 																	<option value="2">xtls</option>
+																	<option value="3">reality</option>
 																</select>
 															</td>
 														</tr>
 														<tr id="row_v2_flow" style="display:none;">
-															<th width="50%">XTLS flow</th>
+															<th width="50%">XTLS/REALITY flow</th>
 															<td>
 																<select name="v2_flow" id="v2_flow" class="input" style="width: 200px;">
 																	<option value="0">未配置</option>
 																	<option value="1">xtls-rprx-direct</option>
 																	<option value="2">xtls-rprx-splice</option>
+																	<option value="3">xtls-rprx-vision</option>
 																</select>
 
 															</td>
 														</tr>
 														<tr id="row_tj_tls_host" style="display:none;">
-															<th width="50%">TLS/XTLS Host</th>
+															<th width="50%">TLS/XTLS/REALITY Host(SNI)</th>
 															<td>
 																<input type="text" class="input" size="15" name="ssp_tls_host" id="ssp_tls_host" style="width: 200px" value="">
+															</td>
+														</tr>
+														<tr id="row_reality_pubkey" style="display:none;">
+															<th width="50%">REALITY 公钥</th>
+															<td>
+																<input type="text" class="input" size="15" name="ssp_reality_pubkey" id="ssp_reality_pubkey" style="width: 200px" value="">
+															</td>
+														</tr>
+														<tr id="row_reality_shortid" style="display:none;">
+															<th width="50%">REALITY 短ID</th>
+															<td>
+																<input type="text" class="input" size="15" name="ssp_reality_shortid" id="ssp_reality_shortid" style="width: 200px" value="">
+															</td>
+														</tr>
+														<tr id="row_reality_fingerprint" style="display:none;">
+															<th width="50%">REALITY 指纹</th>
+															<td>
+																<input type="text" class="input" size="15" name="ssp_reality_fingerprint" id="ssp_reality_fingerprint" style="width: 200px" value="">
 															</td>
 														</tr>
 														<tr id="row_v2_mux" style="display:none;">

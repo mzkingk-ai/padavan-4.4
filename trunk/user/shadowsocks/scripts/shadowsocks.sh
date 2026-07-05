@@ -433,14 +433,13 @@ start_AD() {
 		log "广告过滤功能未开启或者过滤地址失效，网络异常等 ！！！"
 	else
 		log "去广告文件下载成功广告过滤功能已启用..."
-		if [ -f "/tmp/adnew.conf" ]; then
-			check = `grep -wq "address=" /tmp/adnew.conf`
-	  		if [ ! -n "$check" ] ; then
+			if grep -q "^address=" /tmp/adnew.conf 2>/dev/null; then
+				# anti-ad.net 格式: address=/domain/ → 直接使用
 				cp /tmp/adnew.conf /tmp/dnsmasq.dom/anti-ad-for-dnsmasq.conf
-	  		else
-			    cat /tmp/adnew.conf | grep ^\|\|[^\*]*\^$ | sed -e 's:||:address\=\/:' -e 's:\^:/0\.0\.0\.0:' > /tmp/dnsmasq.dom/anti-ad-for-dnsmasq.conf
+			else
+				# adblock 格式: ||domain^ → 转换为 dnsmasq 格式
+				cat /tmp/adnew.conf | grep ^\|\|[^\*]*\^$ | sed -e 's:||:address\=\/:' -e 's:\^:/0\.0\.0\.0:' > /tmp/dnsmasq.dom/anti-ad-for-dnsmasq.conf
 			fi
-		fi
 	fi
 	rm -f /tmp/adnew.conf
 }
