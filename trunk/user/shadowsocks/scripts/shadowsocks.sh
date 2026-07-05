@@ -282,7 +282,7 @@ start_redir_tcp() {
 		log "已运行 $($bin -version | head -1)"
 		;;
 	xray)
-		XRAY_RAY_BUFFER_SIZE=10 GOGC=30 run_bin $bin -config $xray_json_file
+		XRAY_RAY_BUFFER_SIZE=20 GOGC=30 run_bin $bin -config $xray_json_file
 		log "已运行 $($bin -version | head -1)"
 		;;	
 	socks5)
@@ -320,7 +320,7 @@ start_redir_udp() {
 				log "UDP 已合并到 TCP xray 实例，跳过独立启动"
 			else
 				gen_config_file $UDP_RELAY_SERVER 1
-				XRAY_RAY_BUFFER_SIZE=10 GOGC=30 run_bin $bin -config /tmp/xray-ssr-reudp.json
+				XRAY_RAY_BUFFER_SIZE=20 GOGC=30 run_bin $bin -config /tmp/xray-ssr-reudp.json
 			fi
 			;;	
 		trojan)
@@ -486,7 +486,7 @@ start_local() {
 	xray)
 		lua /etc_ro/ss/genxrayconfig.lua $local_server tcp 0 $s5_port >/tmp/xray-ssr-local.json
 		sed -i 's/\\//g' /tmp/xray-ssr-local.json
-		XRAY_RAY_BUFFER_SIZE=10 GOGC=30 run_bin $bin -config /tmp/xray-ssr-local.json
+		XRAY_RAY_BUFFER_SIZE=20 GOGC=30 run_bin $bin -config /tmp/xray-ssr-local.json
 		log "Global_Socks5:$($bin -version | head -1) Started!"
 		;;
 	trojan)
