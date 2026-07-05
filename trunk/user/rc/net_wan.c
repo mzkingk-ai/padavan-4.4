@@ -1664,7 +1664,7 @@ update_resolvconf(int is_first_run, int do_not_notify)
 {
 	FILE *fp;
 	char word[512], *next, *wan_dns;
-	const char *google_dns = "8.8.8.8";
+	const char *google_dns = "119.29.29.29";
 	const char *resolv_temp = "/etc/resolv.tmp";
 	int i, i_pdns, i_total_dns = 0;
 	int lock, dns_static, resolv_changed = 0;

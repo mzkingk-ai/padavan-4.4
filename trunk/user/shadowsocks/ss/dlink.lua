@@ -201,6 +201,8 @@ local function processData(szType, content)
 		-- 按照官方的建议 默认验证ssl证书
 		result.insecure = "0"
 		result.security = "none"
+		result.mux = "1"
+		result.concurrency = "8"
 		result.tls = "1"
 		if host[2]:find("?") then
 			local query = split(host[2], "?")
@@ -259,6 +261,22 @@ local function processData(szType, content)
 				result.insecure = 0
 				if params.flow == "xtls-rprx-splice" then
 					result.flow = "2"
+				elseif params.flow == "xtls-rprx-vision" then
+					result.flow = "3"
+				else
+					result.flow = "1"
+				end
+			elseif params.security == "reality" or params.security == "3" then
+				result.tls = "3"
+				result.tls_host = params.sni or params.host
+				result.insecure = 0
+				result.public_key = params.pbk
+				result.short_id = params.sid
+				result.fingerprint = params.fp
+				if params.flow == "xtls-rprx-splice" then
+					result.flow = "2"
+				elseif params.flow == "xtls-rprx-vision" then
+					result.flow = "3"
 				else
 					result.flow = "1"
 				end

@@ -142,7 +142,7 @@ dir_$(CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS)	+= dnsproxy
 
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS),y)
 dir_$(CONFIG_FIRMWARE_INCLUDE_V2RAY)	        += v2ray
-dir_$(CONFIG_FIRMWARE_INCLUDE_XRAY)	        += xray
+dir_$(CONFIG_FIRMWARE_INCLUDE_XRAY)	        += xraymin
 dir_$(CONFIG_FIRMWARE_INCLUDE_TROJAN)	        += trojan
 dir_$(CONFIG_FIRMWARE_INCLUDE_SSOBFS)		+= simple-obfs
 endif

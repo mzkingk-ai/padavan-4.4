@@ -36,8 +36,8 @@ if [ "$CONFIG_FIRMWARE_INCLUDE_ANTFS" = "y" ] ; then
 	cp -f "$antfs_dir/"antfs.ko "${INSTALL_MOD_PATH}/lib/modules/${KERNELRELEASE}/kernel/antfs"
 fi
 
-# call depmod
-$depmod_bin -ae -F System.map -b "${INSTALL_MOD_PATH}" -r ${KERNELRELEASE}
+# call depmod (去掉 -r 选项: 新版 kmod 34.2 不支持，会导致 modules.dep 不生成)
+$depmod_bin -ae -F System.map -b "${INSTALL_MOD_PATH}" ${KERNELRELEASE}
 
 # clear unneeded depmod files
 rm -f "${INSTALL_MOD_PATH}/lib/modules/${KERNELRELEASE}/modules.alias"
