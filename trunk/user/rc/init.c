@@ -423,7 +423,7 @@ init_sysctl(void)
 	set_interface_conf_int("ipv4", "all", "rp_filter", 0); // new logic for new kernels
 
 	fput_int("/proc/sys/vm/min_free_kbytes", KERNEL_MIN_FREE_KBYTES);
-	fput_int("/proc/sys/vm/overcommit_memory", 0);
+	fput_int("/proc/sys/vm/overcommit_memory", 1);	/* always overcommit for Go runtime (xray) */
 
 	set_tcp_tweaks();
 
