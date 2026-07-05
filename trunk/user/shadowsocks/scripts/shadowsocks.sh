@@ -250,6 +250,20 @@ start_rules() {
 start_redir_tcp() {
 	ARG_OTA=""
 	gen_config_file $GLOBAL_SERVER 0 1080
+
+	# 自动解析 xray/v2ray 服务器域名并写入 hosts（避免 DNS 循环导致连接失败）
+	if [ "$(nvram get d_type)" = "xray" ] || [ "$(nvram get d_type)" = "v2ray" ]; then
+		local json_file="$xray_json_file"
+		[ ! -f "$json_file" ] && json_file="$v2_json_file"
+		local srv_addr=$(grep -o '"address"[^,]*' "$json_file" 2>/dev/null | head -1 | cut -d'"' -f4)
+		if [ -n "$srv_addr" ] && ! echo "$srv_addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+			local srv_ip=$(nslookup "$srv_addr" 2>/dev/null | grep 'Address 1' | awk '{print $3}')
+			if [ -n "$srv_ip" ]; then
+				grep -q "$srv_addr" /etc/hosts 2>/dev/null || echo "$srv_ip $srv_addr" >> /etc/hosts
+			fi
+		fi
+	fi
+
 	stype=$(nvram get d_type)
 	local bin=$(find_bin $stype)
 	[ ! -f "$bin" ] && log "Main node:Can't find $bin program, can't start!" && return 1
