@@ -10,24 +10,55 @@ local server = cjson.decode(servertmp)
 -- 构建 inbounds 数组
 local inbounds = {}
 
+-- 判断是否为合并模式（TCP + UDP 共用一个 xray 进程）
+local is_both = (proto == "both")
+
 -- 1) dokodemo-door 入站（透明代理）
 if local_port ~= "0" then
-	table.insert(inbounds, {
-		port = tonumber(local_port),
-		protocol = "dokodemo-door",
-		settings = {
-			network = proto,
-			followRedirect = true
-		},
-		sniffing = {
-			enabled = true,
-			destOverride = { "http", "tls" }
-		}
-	})
+	if is_both then
+		-- 合并模式：同时添加 TCP 和 UDP 入站
+		table.insert(inbounds, {
+			port = tonumber(local_port),
+			protocol = "dokodemo-door",
+			settings = {
+				network = "tcp",
+				followRedirect = true
+			},
+			sniffing = {
+				enabled = true,
+				destOverride = { "http", "tls" }
+			}
+		})
+		table.insert(inbounds, {
+			port = tonumber(local_port),
+			protocol = "dokodemo-door",
+			settings = {
+				network = "udp",
+				followRedirect = true
+			},
+			sniffing = {
+				enabled = true,
+				destOverride = { "http", "tls" }
+			}
+		})
+	else
+		table.insert(inbounds, {
+			port = tonumber(local_port),
+			protocol = "dokodemo-door",
+			settings = {
+				network = proto,
+				followRedirect = true
+			},
+			sniffing = {
+				enabled = true,
+				destOverride = { "http", "tls" }
+			}
+		})
+	end
 end
 
 -- 2) socks 入站（可选）
-if proto == "tcp" and socks_port ~= "0" then
+if (proto == "tcp" or is_both) and socks_port ~= "0" then
 	table.insert(inbounds, {
 		protocol = "socks",
 		port = tonumber(socks_port),

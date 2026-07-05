@@ -136,10 +136,19 @@ gen_config_file() {
 	xray)
 		xray_enable=1
 		if [ "$2" = "1" ]; then
-			lua /etc_ro/ss/genxrayconfig.lua $1 udp 1080 >/tmp/xray-ssr-reudp.json
-			sed -i 's/\\//g' /tmp/xray-ssr-reudp.json
+			# UDP only: 仅当 UDP_RELAY_SERVER 与 GLOBAL_SERVER 不同时才独立启动
+			# 相同时合并到 TCP 实例中，节省内存
+			if [ "$UDP_RELAY_SERVER" != "$GLOBAL_SERVER" ]; then
+				lua /etc_ro/ss/genxrayconfig.lua $1 udp 1080 >/tmp/xray-ssr-reudp.json
+				sed -i 's/\\//g' /tmp/xray-ssr-reudp.json
+			fi
 		else
-			lua /etc_ro/ss/genxrayconfig.lua $1 tcp 1080 >$xray_json_file
+			# TCP: 生成合并配置（同时包含 TCP + UDP 入站），用一个 xray 进程处理
+			if [ "$UDP_RELAY_SERVER" = "$GLOBAL_SERVER" ] || [ "$UDP_RELAY_SERVER" = "nil" ]; then
+				lua /etc_ro/ss/genxrayconfig.lua $1 both 1080 >$xray_json_file
+			else
+				lua /etc_ro/ss/genxrayconfig.lua $1 tcp 1080 >$xray_json_file
+			fi
 			sed -i 's/\\//g' $xray_json_file
 		fi
 		;;	
@@ -273,7 +282,7 @@ start_redir_tcp() {
 		log "已运行 $($bin -version | head -1)"
 		;;
 	xray)
-		run_bin $bin -config $xray_json_file
+		GOGC=30 run_bin $bin -config $xray_json_file
 		log "已运行 $($bin -version | head -1)"
 		;;	
 	socks5)
@@ -306,8 +315,13 @@ start_redir_udp() {
 			run_bin $bin -config /tmp/v2-ssr-reudp.json
 			;;
 		xray)
-			gen_config_file $UDP_RELAY_SERVER 1
-			run_bin $bin -config /tmp/xray-ssr-reudp.json
+			# 如果与 TCP 使用相同服务器则跳过（已合并到 TCP 实例中）
+			if [ "$UDP_RELAY_SERVER" = "$GLOBAL_SERVER" ]; then
+				log "UDP 已合并到 TCP xray 实例，跳过独立启动"
+			else
+				gen_config_file $UDP_RELAY_SERVER 1
+				GOGC=30 run_bin $bin -config /tmp/xray-ssr-reudp.json
+			fi
 			;;	
 		trojan)
 			gen_config_file $UDP_RELAY_SERVER 1
@@ -472,7 +486,7 @@ start_local() {
 	xray)
 		lua /etc_ro/ss/genxrayconfig.lua $local_server tcp 0 $s5_port >/tmp/xray-ssr-local.json
 		sed -i 's/\\//g' /tmp/xray-ssr-local.json
-		run_bin $bin -config /tmp/xray-ssr-local.json
+		GOGC=30 run_bin $bin -config /tmp/xray-ssr-local.json
 		log "Global_Socks5:$($bin -version | head -1) Started!"
 		;;
 	trojan)
