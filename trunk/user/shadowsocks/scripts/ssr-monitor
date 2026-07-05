@@ -13,7 +13,7 @@ server_process_count=$1
 redir_tcp_process=$2
 redir_udp_process=$3
 tunnel_process=$4
-v2ray_process=$5
+xray_process=$5      # 也兼容 v2ray（第5个参数）
 local_process=$6
 pdnsd_process=$7
 chinadnsng_process=$8
@@ -105,8 +105,8 @@ do
 		then
 			log "检测到 $bin 进程挂掉，正在重启..."
 			killall -q -9 $bin
-			run_bin /usr/bin/$bin -config /tmp/v2-redir.json
-			run_bin /usr/bin/$bin -config /tmp/xray-redir.json
+			# 合并模式只用 xray-redir.json；v2-redir.json 仅 v2ray 时存在
+			[ -f "/tmp/xray-redir.json" ] && run_bin /usr/bin/$bin -config /tmp/xray-redir.json; [ -f "/tmp/v2-redir.json" ] && run_bin /usr/bin/$bin -config /tmp/v2-redir.json
 		fi
 	fi
 	#local

@@ -317,6 +317,7 @@ start_redir_udp() {
 		xray)
 			# 如果与 TCP 使用相同服务器则跳过（已合并到 TCP 实例中）
 			if [ "$UDP_RELAY_SERVER" = "$GLOBAL_SERVER" ]; then
+				redir_udp=0  # 已合并，无需独立监控
 				log "UDP 已合并到 TCP xray 实例，跳过独立启动"
 			else
 				gen_config_file $UDP_RELAY_SERVER 1
