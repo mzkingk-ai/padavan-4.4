@@ -1,1 +1,138 @@
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build temporary files from padavan compilation
+libtool
+libtoolT
+.libtool
+*.la
+*.lo
+*.o
+*.o.cmd
+*.ko
+*.ko.cmd
+*.mod.c
+*.mod.o
+*.symvers
+Module.symvers
+modules.order
+.tmp_versions/
+
+# Configure / autotools generated
+config_done
+*_config_done
+configure~
+config.log
+config.status
+autom4te.cache
+stamp-h1
+.libs
+m4/
+m4~
+*~
+
+# Compilation output binaries
+trunk/tools/mksquashfs_xz/mksquashfs
+trunk/tools/mksquashfs_xz/unsquashfs
+trunk/tools/mksquashfs_xz/config_xz_done
+trunk/tools/lzma/lzma
+trunk/tools/mkimage/mkimage
+trunk/tools/sstrip/sstrip
+
+# Extracted source tarball build dirs
+trunk/tools/mksquashfs_xz/xz-5.6.4/
+trunk/tools/lzma/lzma-24.09/
+
+# Workspace fetch downloads
+.fetch/
+
+# Image output
+images/
+
+# toolchain
 toolchain-mipsel/
+
+# Build output - user package compiled files
+*.tristate
+*.lst
+*.symtypes
+*.elf
+*.bin
+*.gz
+*.lzma
+
+# Extracted tarball dirs (not tracked in git)
+trunk/libs/*/*/
+trunk/user/*/*/
+trunk/user/*/src/*.o
+
+# Specific user package build outputs
+trunk/user/antfs/antfs.ko
+trunk/user/antfs/antfs.o
+trunk/user/antfs/antfs.mod.c
+trunk/user/antfs/antfs.mod.o
+trunk/user/antfs/modules.order
+trunk/user/antfs/Module.symvers
+trunk/user/antfs/.*.cmd
+trunk/user/antfs/.tmp_versions/
+
+# Per-package: dnsmasq config cache
+trunk/user/dnsmasq/dnsmasq-2.90/src/.copts_*
+
+# Per-package: dosfstools build output
+trunk/user/dosfstools/dosfstools-4.2/Makefile
+trunk/user/dosfstools/dosfstools-4.2/manpages/
+trunk/user/dosfstools/dosfstools-4.2/tests/
+trunk/user/dosfstools/dosfstools-4.2/src/Makefile
+trunk/user/dosfstools/dosfstools-4.2/src/fatlabel
+trunk/user/dosfstools/dosfstools-4.2/src/fsck.fat
+trunk/user/dosfstools/dosfstools-4.2/src/mkfs.fat
+trunk/user/dosfstools/dosfstools-4.2/src/testdevinfo
+trunk/user/dosfstools/dosfstools-4.2/src/version.h
+
+# Per-package: e2fsprogs shared libs
+trunk/user/e2fsprogs/e2fsprogs-1.47.2/lib/*.so
+trunk/user/e2fsprogs/e2fsprogs-1.47.2/lib/*/*.so*
+
+# Per-package: iptables shared objects
+trunk/user/iptables/iptables-1.8.10/extensions/*.so
+trunk/user/iptables/iptables-1.8.10/iptables/*.so
+
+# Per-package: tcpdump build output
+trunk/user/tcpdump/tcpdump-4.99.5/Makefile
+trunk/user/tcpdump/tcpdump-4.99.5/config.h
+trunk/user/tcpdump/tcpdump-4.99.5/tcpdump
+
+# Editor backups
+*.bak
+*~
+
+# Downloaded tarballs
+trunk/user/aria2/aria2-1.37.0.tar.xz
+
+# Translation / locale generated
+trunk/user/miniupnpd/miniupnpd-2.3.7/config.h
+trunk/user/miniupnpd/miniupnpd-2.3.7/config.mk
+
+# User-space compiled binaries
+trunk/user/comgt-0.32/comgt
+trunk/user/igmpproxy/igmpproxy
+trunk/user/p910nd/p910nd
+trunk/user/tcpdump/tcpdump
+trunk/user/usb-modeswitch/usb_modeswitch
+trunk/user/vsftpd/vsftpd
+trunk/user/wsdd2/wsdd2
+trunk/user/libdisk/libdisk.so
+trunk/user/libdisk/test_share
+
+# All compiled shared objects in user directories
+trunk/user/*/*.so
+trunk/user/*/*/*.so
