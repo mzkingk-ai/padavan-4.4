@@ -3667,16 +3667,11 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (tp->tlp_high_seq)
 		tcp_process_tlp_ack(sk, ack, flag);
 
-		/* BBR / model-based CC: pass rate sample to cong_control */
+		/* BBR / model-based CC: pass ACK info to cong_control */
 		if (icsk->icsk_ca_ops->cong_control) {
 			struct rate_sample rs = { 0 };
 
-			if (tp->delivered_mstamp.stamp_us)
-				rs.prior_stamp_us = tp->delivered_mstamp.stamp_us;
-			rs.delivered = tp->delivered;
 			rs.acked_sacked = acked;
-			if (tcp_min_rtt(tp))
-				rs.interval_us = tcp_min_rtt(tp);
 			icsk->icsk_ca_ops->cong_control(sk, ack, &rs);
 		}
 

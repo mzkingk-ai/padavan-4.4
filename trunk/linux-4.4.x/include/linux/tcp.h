@@ -248,18 +248,6 @@ struct tcp_sock {
 	u32	reordering;	/* Packet reordering metric.		*/
 	u32	snd_up;		/* Urgent pointer		*/
 
-	/*
-	 * Rate sampling (for BBR and model-based CC)
-	 */
-	u32	delivered;		/* total data packets delivered */
-	u32	lost;			/* total data packets lost */
-	u32	app_limited;		/* app-limited send window indicator */
-	struct skb_mstamp first_tx_mstamp;  /* first send in time window */
-	struct skb_mstamp delivered_mstamp; /* time of last delivered */
-	u32	rate_delivered;		/* saved rate sample: delivered */
-	u32	rate_interval_us;	/* saved rate sample: interval */
-	u8	rate_app_limited;	/* saved rate sample: app-limited? */
-
 /*
  *      Options received (usually on last packet, some only on SYN packets).
  */
