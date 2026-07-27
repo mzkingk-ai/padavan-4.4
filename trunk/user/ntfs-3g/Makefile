@@ -25,6 +25,7 @@ config_test:
 	fi )
 
 configure:
+	cd $(SRC_NAME) ; autoreconf -fi --install 2>&1 | grep -v AM_PATH | head -1 ; cd ..
 	( cd $(SRC_NAME) ; \
 	./configure \
 		--prefix=/usr \
