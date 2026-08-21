@@ -91,18 +91,22 @@ elif [ "$ID_FS_TYPE" == "ntfs" ] ; then
 	if [ "$achk_enable" != "0" ] && [ -x /sbin/chkntfs ] ; then
 		/sbin/chkntfs -a -f --verbose "$dev_full" > "/tmp/chkntfs_result_$1" 2>&1
 	fi
-	kernel_ufsd=`modprobe -l | grep ufsd`
-	kernel_antfs=`modprobe -l | grep antfs`
-	if [ -n "$kernel_antfs" ]; then
-		func_load_module antfs
-		mount -t antfs "$dev_full" "$dev_mount" -o noatime,utf8
-	elif [ -n "$kernel_ufsd" ] ; then
-		func_load_module ufsd
-		mount -t ufsd "$dev_full" "$dev_mount" -o noatime,sparse,nls=utf8,force
-	elif [ -x /sbin/ntfs-3g ] ; then
+	# 优先使用用户态 ntfs-3g（稳定，不依赖内核模块符号匹配）
+	if [ -x /sbin/ntfs-3g ] ; then
 		/sbin/ntfs-3g "$dev_full" "$dev_mount" -o noatime,umask=0,big_writes
 		if [ $? -ne 0 ] ; then
 			/sbin/ntfs-3g "$dev_full" "$dev_mount" -o noatime,umask=0,ro
+		fi
+	else
+		# ntfs-3g 不可用时才尝试内核模块（antfs/ufsd）
+		kernel_ufsd=`modprobe -l | grep ufsd`
+		kernel_antfs=`modprobe -l | grep antfs`
+		if [ -n "$kernel_antfs" ]; then
+			func_load_module antfs
+			mount -t antfs "$dev_full" "$dev_mount" -o noatime,utf8
+		elif [ -n "$kernel_ufsd" ] ; then
+			func_load_module ufsd
+			mount -t ufsd "$dev_full" "$dev_mount" -o noatime,sparse,nls=utf8,force
 		fi
 	fi
 elif [ "$ID_FS_TYPE" == "hfsplus" -o "$ID_FS_TYPE" == "hfs" ] ; then
