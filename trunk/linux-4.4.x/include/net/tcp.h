@@ -847,7 +847,6 @@ enum tcp_ca_ack_event_flags {
 #define TCP_CONG_NEEDS_ECN	0x2
 
 union tcp_cc_info;
-struct rate_sample;
 
 struct tcp_congestion_ops {
 	struct list_head	list;
@@ -873,9 +872,6 @@ struct tcp_congestion_ops {
 	u32  (*undo_cwnd)(struct sock *sk);
 	/* hook for packet ack accounting (optional) */
 	void (*pkts_acked)(struct sock *sk, u32 num_acked, s32 rtt_us);
-	/* BBR-style model-based congestion control (optional) */
-	void (*cong_control)(struct sock *sk, u32 ack,
-				     struct rate_sample *rs);
 	/* get info for inet_diag (optional) */
 	size_t (*get_info)(struct sock *sk, u32 ext, int *attr,
 			   union tcp_cc_info *info);
@@ -896,17 +892,6 @@ void tcp_get_available_congestion_control(char *buf, size_t len);
 void tcp_get_allowed_congestion_control(char *buf, size_t len);
 int tcp_set_allowed_congestion_control(char *allowed);
 int tcp_set_congestion_control(struct sock *sk, const char *name);
-struct rate_sample {
-	u32	prior_delivered;	/* tp->delivered at time of last ACK */
-	u32	prior_stamp_us;		/* stamp_us at prior ACK */
-	s32	delivered;		/* number of packets delivered */
-	s32	interval_us;		/* time for delivered packets */
-	u32	acked_sacked;		/* freshly ACKed or SACKed */
-	u32	losses;			/* freshly marked lost */
-	u8	is_app_limited;		/* is sample app-limited? */
-	u8	is_retrans;		/* is sample a retransmission? */
-};
-
 u32 tcp_slow_start(struct tcp_sock *tp, u32 acked);
 void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked);
 

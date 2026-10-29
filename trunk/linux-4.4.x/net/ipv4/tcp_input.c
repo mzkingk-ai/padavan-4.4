@@ -3667,14 +3667,6 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (tp->tlp_high_seq)
 		tcp_process_tlp_ack(sk, ack, flag);
 
-		/* BBR / model-based CC: pass ACK info to cong_control */
-		if (icsk->icsk_ca_ops->cong_control) {
-			struct rate_sample rs = { 0 };
-
-			rs.acked_sacked = acked;
-			icsk->icsk_ca_ops->cong_control(sk, ack, &rs);
-		}
-
 		/* Advance cwnd if state allows */
 	if (tcp_may_raise_cwnd(sk, flag))
 		tcp_cong_avoid(sk, ack, acked);
