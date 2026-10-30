@@ -1,10 +1,15 @@
-SRC_NAME = smartdns-Release46
-SRC_URL=https://github.com/pymumu/smartdns/archive/refs/tags/Release46.tar.gz
+SMARTDNS_VER = Release48.4
+SRC_NAME = smartdns-$(SMARTDNS_VER)
+SRC_URL=https://github.com/pymumu/smartdns/archive/refs/tags/$(SMARTDNS_VER).tar.gz
 
 THISDIR = $(shell pwd)
 
+# smartdns 48.x 使用 64 位原子操作，mips32 上需要 libatomic；
+# 该库不在 padavan 默认 romfs 中，需要随包安装到 /lib。
+LIBATOMIC = $(shell $(CC) -print-file-name=libatomic.so.1 2>/dev/null)
+
 all: download_test extract_test config_test
-	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME)
+	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) NO_GIT_VER=1 VER=$(SMARTDNS_VER)
 
 download_test:
 	( if [ ! -f $(THISDIR)/$(SRC_NAME).tar.gz ]; then \
@@ -37,3 +42,9 @@ romfs:
 	$(ROMFSINST) /etc_ro/smartdns_blacklist-ip.conf
 	$(ROMFSINST) /etc_ro/smartdns_custom.conf
 	$(ROMFSINST) /etc_ro/smartdns_whitelist-ip.conf
+	@if [ -f "$(LIBATOMIC)" ] ; then \
+		$(ROMFSINST) -p +x $(LIBATOMIC) /lib/libatomic.so.1 ; \
+	else \
+		echo "ERROR: libatomic.so.1 not found (CC=$(CC)), smartdns will not start" >&2 ; \
+		exit 1 ; \
+	fi
