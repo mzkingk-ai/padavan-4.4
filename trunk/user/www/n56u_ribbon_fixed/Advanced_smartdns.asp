@@ -252,7 +252,7 @@
             <input type="hidden" name="group_id" value="SdnsList">
             <input type="hidden" name="action_mode" value="">
             <input type="hidden" name="action_script" value="">
-            <input type="hidden" name="sdnss_staticnum_x_0" value="<% nvram_get_x(" SdnsList", "sdnss_staticnum_x" );
+            <input type="hidden" name="sdnss_staticnum_x_0" value="<% nvram_get_x("SdnsList", "sdnss_staticnum_x");
                 %>" readonly="1" />
 
             <div class="container-fluid">
@@ -372,7 +372,7 @@
                                                     <td>
                                                         <input type="text" maxlength="15" class="input" size="15"
                                                             name="sdns_name" style="width: 200px"
-                                                            value="<% nvram_get_x(""," sdns_name"); %>" />
+                                                            value="<% nvram_get_x("","sdns_name"); %>" />
                                                     </td>
                                                 </tr>
 
@@ -383,7 +383,9 @@
                                                     <td>
                                                         <input type="text" maxlength="5" class="input" size="15"
                                                             name="sdns_port" style="width: 200px"
-                                                            value="<% nvram_get_x("", " sdns_port"); %>">
+                                                            inputmode="numeric" pattern="[0-9]{1,5}"
+                                                            title="1-65535"
+                                                            value="<% nvram_get_x("", "sdns_port"); %>">
                                                     </td>
                                                 </tr>
                                                 <tr>
@@ -459,8 +461,11 @@
                                             <#SmartDNS6#>
                                         </th>
                                         <td>
-                                            <input type="text" maxlength="64" class="input" size="15" name="sdns_cache"
-                                                style="width: 200px" value="<% nvram_get_x("", " sdns_cache"); %>">
+                                            <input type="text" maxlength="20" class="input" size="15" name="sdns_cache"
+                                                style="width: 200px" inputmode="numeric" pattern="[0-9]{1,20}"
+                                                title="缓存大小（MB），0 表示关闭缓存，建议 4096-131072"
+                                                value="<% nvram_get_x("", "sdns_cache"); %>">
+                                            <div><span style="color:#888;">单位 MB，填 0 表示关闭缓存；路由器建议 4096 - 131072</span></div>
                                         </td>
                                     </tr>
                                     <tr>
@@ -495,7 +500,7 @@
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15"
                                                 name="sdns_tcp_idle_time" style="width: 200px"
-                                                value="<% nvram_get_x("", " sdns_tcp_idle_time"); %>">
+                                                value="<% nvram_get_x("", "sdns_tcp_idle_time"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -504,7 +509,7 @@
                                         </th>
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15" name="sdns_rr_ttl"
-                                                style="width: 200px" value="<% nvram_get_x("", " sdns_rr_ttl"); %>">
+                                                style="width: 200px" value="<% nvram_get_x("", "sdns_rr_ttl"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -513,8 +518,7 @@
                                         </th>
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15"
-                                                name="sdns_rr_ttl_min" style="width: 200px" value="<% nvram_get_x("", "
-                                                sdns_rr_ttl_min"); %>">
+                                                name="sdns_rr_ttl_min" style="width: 200px" value="<% nvram_get_x("", "sdns_rr_ttl_min"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -523,8 +527,7 @@
                                         </th>
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15"
-                                                name="sdns_rr_ttl_max" style="width: 200px" value="<% nvram_get_x("", "
-                                                sdns_rr_ttl_max"); %>">
+                                                name="sdns_rr_ttl_max" style="width: 200px" value="<% nvram_get_x("", "sdns_rr_ttl_max"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -534,7 +537,7 @@
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15"
                                                 name="sdns_rr_ttl_reply_max" style="width: 200px"
-                                                value="<% nvram_get_x("", " sdns_rr_ttl_reply_max"); %>">
+                                                value="<% nvram_get_x("", "sdns_rr_ttl_reply_max"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -544,7 +547,7 @@
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="15"
                                                 name="sdns_max_reply_ip_num" style="width: 200px"
-                                                value="<% nvram_get_x("", " sdns_max_reply_ip_num"); %>">
+                                                value="<% nvram_get_x("", "sdns_max_reply_ip_num"); %>">
                                         </td>
                                     </tr>
                                     </table>
@@ -697,7 +700,7 @@
                                             <td>
                                                 <input type="text" maxlength="64" class="input" size="15"
                                                     name="sdns_speed_mode" style="width: 200px"
-                                                    value="<% nvram_get_x("", " sdns_speed_mode"); %>">
+                                                    value="<% nvram_get_x("", "sdns_speed_mode"); %>">
                                                 <div><span style="color:#888;">例如: none 为禁止 ping,tcp:80,tcp:443</span>
                                                 </div>
                                             </td>
@@ -732,7 +735,7 @@
                                             <td>
                                                 <input type="text" maxlength="64" class="input" size="64"
                                                     name="sdns_ip_change_time" style="width: 120px"
-                                                    value="<% nvram_get_x("", " sdns_ip_change_time"); %>"> 毫秒（0-100）
+                                                    value="<% nvram_get_x("", "sdns_ip_change_time"); %>"> 毫秒（0-100）
                                             </td>
                                         </tr>
                                         <tr>
@@ -799,7 +802,7 @@
                                             <td>
                                                 <input type="text" maxlength="64" class="input" size="15"
                                                     name="sdns_force_qtype_soa" style="width: 200px"
-                                                    value="<% nvram_get_x("", " sdns_force_qtype_soa"); %>">
+                                                    value="<% nvram_get_x("", "sdns_force_qtype_soa"); %>">
                                                 <div><span style="color:#888;">
                                                         <#SmartDNS25_1#>
                                                     </span></div>
@@ -860,7 +863,7 @@
                                     </th>
                                     <td>
                                         <input type="text" maxlength="64" class="input" size="15" name="sdns_exp_ttl"
-                                            style="width: 200px" value="<% nvram_get_x("", " sdns_exp_ttl"); %>">
+                                            style="width: 200px" value="<% nvram_get_x("", "sdns_exp_ttl"); %>">
                                         <div><span style="color:#888;">
                                                 <#SmartDNS28_1#>
                                             </span></div>
@@ -872,8 +875,7 @@
                                     </th>
                                     <td>
                                         <input type="text" maxlength="64" class="input" size="15"
-                                            name="sdns_exp_ttl_max" style="width: 200px" value="<% nvram_get_x("", "
-                                            sdns_exp_ttl_max"); %>">
+                                            name="sdns_exp_ttl_max" style="width: 200px" value="<% nvram_get_x("", "sdns_exp_ttl_max"); %>">
                                         <div><span style="color:#888;">
                                                 <#SmartDNS28_1#>
                                             </span></div>
@@ -886,7 +888,7 @@
                                     <td>
                                         <input type="text" maxlength="64" class="input" size="15"
                                             name="sdns_exp_prefetch_time" style="width: 200px"
-                                            value="<% nvram_get_x("", " sdns_exp_prefetch_time"); %>">
+                                            value="<% nvram_get_x("", "sdns_exp_prefetch_time"); %>">
                                         <div><span style="color:#888;">
                                                 <#SmartDNS28_1#>
                                             </span></div>
@@ -924,8 +926,7 @@
                                         </th>
                                         <td>
                                             <input type="text" maxlength="64" class="input" size="64" name="sdnse_name"
-                                                placeholder="default" style="width: 200px" value="<% nvram_get_x("", "
-                                                sdnse_name"); %>">
+                                                placeholder="default" style="width: 200px" value="<% nvram_get_x("", "sdnse_name"); %>">
                                             <div><span style="color:#888;">例如: oversea, office, home</span></div>
                                         </td>
                                     </tr>
@@ -934,8 +935,9 @@
                                             <#SmartDNS2#>
                                         </th>
                                         <td>
-                                            <input type="text" maxlength="64" class="input" size="64" name="sdnse_port"
-                                                style="width: 200px" value="<% nvram_get_x("", " sdnse_port"); %>">
+                                            <input type="text" maxlength="5" class="input" size="64" name="sdnse_port"
+                                                style="width: 200px" inputmode="numeric" pattern="[0-9]{1,5}"
+                                                title="1-65535" value="<% nvram_get_x("", "sdnse_port"); %>">
                                         </td>
                                     </tr>
                                     <tr>
@@ -1170,16 +1172,14 @@
                                             <th width="50%">上游名称:</th>
                                             <td>
                                                 <input type="text" maxlength="255" class="span12" style="width: 200px"
-                                                    size="200" name="sdnss_name_x_0" value="<% nvram_get_x("", "
-                                                    sdnss_name_x_0"); %>" onKeyPress="return is_string(this,event);"/>
+                                                    size="200" name="sdnss_name_x_0" value="<% nvram_get_x("", "sdnss_name_x_0"); %>" onKeyPress="return is_string(this,event);"/>
                                             </td>
                                         </tr>
                                         <tr>
                                             <th width="50%">上游地址:</th>
                                             <td>
                                                 <input type="text" maxlength="255" class="span12" style="width: 200px"
-                                                    size="200" name="sdnss_ip_x_0" value="<% nvram_get_x("", "
-                                                    sdnss_ip_x_0"); %>" onKeyPress="return is_string(this,event);"/>
+                                                    size="200" name="sdnss_ip_x_0" value="<% nvram_get_x("", "sdnss_ip_x_0"); %>" onKeyPress="return is_string(this,event);"/>
                                             </td>
                                         </tr>
                                         <tr>
@@ -1228,8 +1228,7 @@
                                             <th width="50%">服务器组(留空为不指定):</th>
                                             <td>
                                                 <input type="text" maxlength="255" class="span12" style="width: 200px"
-                                                    size="200" name="sdnss_named_x_0" value="<% nvram_get_x("", "
-                                                    sdnss_named_x_0"); %>" />
+                                                    size="200" name="sdnss_named_x_0" value="<% nvram_get_x("", "sdnss_named_x_0"); %>" />
                                                 <div><span style="color:#888;">例如: oversea, office, home</span></div>
                                             </td>
                                         </tr>
@@ -1237,8 +1236,7 @@
                                             <th width="50%">加入ipset(解析gfwlist要用):</th>
                                             <td>
                                                 <input type="text" maxlength="255" class="span12" style="width: 200px"
-                                                    size="200" name="sdnss_ipset_x_0" value="<% nvram_get_x("", "
-                                                    sdnss_ipset_x_0"); %>" />
+                                                    size="200" name="sdnss_ipset_x_0" value="<% nvram_get_x("", "sdnss_ipset_x_0"); %>" />
                                                 <div><span style="color:#888;">注意IP直接填,如果是域名</span></div>
                                                 <div><span style="color:#888;">例如:https://dns.google/dns-query</span>
                                                 </div>
@@ -1356,7 +1354,7 @@
                                         <th width="50%">过滤文件地址:</th>
                                         <td>
                                             <input type="text" class="input" size="15" name="sdns_adblock_url"
-                                                style="width: 280px" value="<% nvram_get_x(""," sdns_adblock_url"); %>"
+                                                style="width: 280px" value="<% nvram_get_x("","sdns_adblock_url"); %>"
                                             />
                                         </td>
                                     </tr>
