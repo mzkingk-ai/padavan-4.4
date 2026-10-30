@@ -2323,6 +2323,15 @@ static int aliyundrive_status_hook(int eid, webs_t wp, int argc, char **argv)
 }
 #endif
 
+#if defined (APP_WYYBIN)
+static int wyybin_status_hook(int eid, webs_t wp, int argc, char **argv)
+{
+	int wyybin_status_code = pids("UnblockNeteaseMusic");
+	websWrite(wp, "function wyybin_status() { return %d;}\n", wyybin_status_code);
+	return 0;
+}
+#endif
+
 #if defined (APP_SMARTDNS)
 static int smartdns_status_hook(int eid, webs_t wp, int argc, char **argv)
 {
@@ -2571,6 +2580,11 @@ ej_firmware_caps_hook(int eid, webs_t wp, int argc, char **argv)
 #else
 	int found_app_sqm = 0;
 #endif
+#if defined(APP_WYYBIN)
+	int found_app_wyybin = 1;
+#else
+	int found_app_wyybin = 0;
+#endif
 #if defined(APP_SMARTDNS)
 	int found_app_smartdns = 1;
 #else
@@ -2794,7 +2808,8 @@ ej_firmware_caps_hook(int eid, webs_t wp, int argc, char **argv)
 		"function found_app_vpnsvr() { return %d;}\n"
 		"function found_app_vpncli() { return %d;}\n"
 		"function found_app_smartdns() { return %d;}\n"
-		"function found_app_adguardhome() { return %d;}\n",
+		"function found_app_adguardhome() { return %d;}\n"
+		"function found_app_wyybin() { return %d;}\n",
 		found_utl_hdparm,
 		found_app_ovpn,
 		found_app_dlna,
@@ -2828,7 +2843,8 @@ ej_firmware_caps_hook(int eid, webs_t wp, int argc, char **argv)
 		found_app_vpnsvr,
 		found_app_vpncli,
 		found_app_smartdns,
-		found_app_adguardhome
+		found_app_adguardhome,
+		found_app_wyybin
 	);
 
 	websWrite(wp,
@@ -4574,6 +4590,9 @@ struct ej_handler ej_handlers[] =
 #endif
 #if defined (APP_SMARTDNS)
 	{ "smartdns_status", smartdns_status_hook},
+#endif
+#if defined (APP_WYYBIN)
+	{ "wyybin_status", wyybin_status_hook},
 #endif
 #if defined (APP_FRP)
 	{ "frpc_status", frpc_status_hook},

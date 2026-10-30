@@ -190,6 +190,7 @@ dir_$(CONFIG_FIRMWARE_INCLUDE_MINIEAP)		+= minieap
 dir_$(CONFIG_FIRMWARE_INCLUDE_NJIT_CLIENT)	+= njit-client
 dir_$(CONFIG_FIRMWARE_INCLUDE_MENTOHUST)	+= mentohust
 dir_$(CONFIG_FIRMWARE_INCLUDE_SMARTDNS)		+= smartdns
+dir_$(CONFIG_FIRMWARE_INCLUDE_WYYBIN)		+= unblockneteasemusic
 dir_$(CONFIG_FIRMWARE_INCLUDE_xTUN) 		+= xTun
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_WING),y)
 dir_y 			+= wing

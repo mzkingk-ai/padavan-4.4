@@ -89,6 +89,11 @@ logger -t "自动启动" "正在启动 ddnsto..."
 /usr/bin/ddnsto.sh start
 fi
 
+if [ $(nvram get wyybin_enable) = 1 ] ; then
+logger -t "自动启动" "正在启动网易云音乐解锁..."
+/usr/bin/unblockneteasemusic.sh start
+fi
+
 if [ $(nvram get aliyundrive_enable) = 1 ] ; then
 logger -t "自动启动" "正在启动阿里云盘..."
 /usr/bin/aliyundrive-webdav.sh start

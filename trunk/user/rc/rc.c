@@ -1182,6 +1182,12 @@ handle_notifications(void)
 			restart_ddnsto();
 		}
 #endif
+#if defined(APP_WYYBIN)
+		else if (strcmp(entry->d_name, RCN_RESTART_WYY) == 0)
+		{
+			restart_wyybin();
+		}
+#endif
 
 #if defined(APP_ALDRIVER)
 		else if (strcmp(entry->d_name, RCN_RESTART_ALDRIVER) == 0)

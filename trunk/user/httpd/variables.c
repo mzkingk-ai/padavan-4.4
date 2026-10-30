@@ -978,6 +978,19 @@
 		};
 #endif
 
+#if defined(APP_WYYBIN)
+	struct variable variables_WYYBIN[] = {
+			{"wyybin_enable", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_port", "5", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_source", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_sslport", "5", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_mode", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_extra", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_minscore", "", NULL, EVM_RESTART_WYYBIN},
+			{0,0,0,0}
+		};
+#endif
+
 #if defined(APP_DDNSTO)
 	struct variable variables_DDNSTO[] = {
 			{"ddnsto_enable", "", NULL, EVM_RESTART_DDNSTO},
@@ -1361,6 +1374,9 @@
 #if defined(APP_ZEROTIER)
 		{"ZeroConf",		variables_ZeroConf},
 #endif
+#if defined(APP_WYYBIN)
+		{"WYYBIN",		variables_WYYBIN},
+#endif
 #if defined(APP_DDNSTO)
 		{"DDNSTO",		variables_DDNSTO},
 #endif
@@ -1480,6 +1496,9 @@
 #endif
 #if defined(APP_ZEROTIER)
 		{EVM_RESTART_ZEROTIER,		EVT_RESTART_ZEROTIER,		RCN_RESTART_ZEROTIER,	0},
+#endif
+#if defined(APP_WYYBIN)
+		{EVM_RESTART_WYYBIN,		EVT_RESTART_WYYBIN,		RCN_RESTART_WYY,	0},
 #endif
 #if defined(APP_DDNSTO)
 		{EVM_RESTART_DDNSTO,		EVT_RESTART_DDNSTO,		RCN_RESTART_DDNSTO,	0},

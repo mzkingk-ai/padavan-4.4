@@ -560,6 +560,36 @@ void restart_smartdns(void){
 }
 #endif
 
+#if defined(APP_WYYBIN)
+/*
+ * 转发模式会改写 /etc/hosts 并向 dnsmasq 配置里写入 address=/music.163.com/，
+ * 这些改动只有让 dnsmasq 重新读取配置才生效，因此在启停之后重启一次 DNS。
+ * 用 SIGHUP 而不是 restart_dhcpd()，避免顺带把 DHCP 租约一起重置。
+ */
+void wyybin_apply_dns(void){
+	/* 无论开启还是关闭都要重新加载：关闭时恰好需要丢掉劫持规则。
+	   脚本本身没做改动时 restart_dns() 只是发个 SIGHUP，代价很低。 */
+	restart_dns();
+}
+
+void stop_wyybin(void){
+	eval("/usr/bin/unblockneteasemusic.sh","stop");
+	wyybin_apply_dns();
+}
+
+void start_wyybin(void){
+	int wyybin_enable = nvram_get_int("wyybin_enable");
+	if ( wyybin_enable == 1)
+		eval("/usr/bin/unblockneteasemusic.sh","start");
+	wyybin_apply_dns();
+}
+
+void restart_wyybin(void){
+	stop_wyybin();
+	start_wyybin();
+}
+#endif
+
 #if defined(APP_ALIDDNS)
 void stop_aliddns(void){
 	eval("/usr/bin/aliddns.sh","stop");
@@ -880,6 +910,9 @@ stop_services(int stopall)
 #endif
 #if defined(APP_SMARTDNS)
 	stop_smartdns();
+#endif
+#if defined(APP_WYYBIN)
+	stop_wyybin();
 #endif
 #if defined(APP_ALIDDNS)
 	stop_aliddns();

@@ -606,6 +606,12 @@ void stop_smartdns(void);
 void start_smartdns(void);
 void restart_smartdns(void);
 #endif
+#if defined(APP_WYYBIN)
+void wyybin_apply_dns(void);
+void stop_wyybin(void);
+void start_wyybin(void);
+void restart_wyybin(void);
+#endif
 #if defined(APP_FRP)
 void stop_frp(void);
 void start_frp(void);
