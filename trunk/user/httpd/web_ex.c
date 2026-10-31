@@ -2330,6 +2330,65 @@ static int wyybin_status_hook(int eid, webs_t wp, int argc, char **argv)
 	websWrite(wp, "function wyybin_status() { return %d;}\n", wyybin_status_code);
 	return 0;
 }
+
+/*
+ * 证书查询 / 重新生成（页面「证书状态」一栏用）。
+ *
+ * 只做取值与调用，真正的判断全部在 unblockneteasemusic.sh 里：
+ * 证书路径可能指向 U 盘，只有 shell 侧才能判断有没有挂载、能否打开。
+ * 输出是纯文本，页面按 key=value 逐行展示。
+ *
+ * 走 start_apply.htm 而不是 apply.cgi：apply.cgi 只认 action_mode，
+ * 这个页面需要把证书状态原样回传给 AJAX 调用者。
+ */
+static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
+{
+	struct variable *v;
+	char *action_mode = websGetVar(wp, "action_mode", "");
+	int regen = (!strcmp(action_mode, " RegenCertWYYBIN "));
+	int sid;
+	char buf[512];
+	FILE *f;
+	size_t n = 0;
+
+	/* 未登录时不允许改证书。这里借 EVM_WYYBIN_CERT_ADMIN 的
+	   EVM_BLOCK_UNSAFE 位做判断，与 validate_asp_apply() 的口径一致 */
+	sid = LookupServiceId("WYYBIN");
+	if (sid >= 0) {
+		for (v = GetVariables(sid); v->name != NULL; ++v) {
+			if (!strcmp(v->name, "wyybin_cert"))
+				break;
+		}
+		if (v->name && !get_login_safe() && (v->event_mask & EVM_BLOCK_UNSAFE)) {
+			websWrite(wp, "ERR|未登录或登录已过期\n");
+			return 0;
+		}
+	}
+
+	f = popen(regen ? "/usr/bin/unblockneteasemusic.sh regen"
+	                : "/usr/bin/unblockneteasemusic.sh cert", "r");
+	if (!f) {
+		websWrite(wp, "ERR|无法执行 unblockneteasemusic.sh\n");
+		return 0;
+	}
+
+	/* 原样转发，最多 4KB，够放 Ok/cert/key/subj 四行 */
+	while (n < sizeof(buf) - 1) {
+		int c = fgetc(f);
+		if (c == EOF)
+			break;
+		buf[n++] = (char)c;
+	}
+	buf[n] = 0;
+	pclose(f);
+
+	if (n == 0)
+		websWrite(wp, "ERR|脚本没有输出（服务未安装？）\n");
+	else
+		websWrite(wp, "%s", buf);
+
+	return 0;
+}
 #endif
 
 #if defined (APP_SMARTDNS)
@@ -4593,6 +4652,8 @@ struct ej_handler ej_handlers[] =
 #endif
 #if defined (APP_WYYBIN)
 	{ "wyybin_status", wyybin_status_hook},
+	/* 只读：检查证书；regen：按已保存的路径重签 */
+	{ "wyybin_cert", wyybin_cert_hook},
 #endif
 #if defined (APP_FRP)
 	{ "frpc_status", frpc_status_hook},

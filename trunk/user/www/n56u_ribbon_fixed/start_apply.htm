@@ -19,6 +19,17 @@ var action_script = '<% get_parameter("action_script"); %>';
 var group_id = '<% get_parameter("group_id"); %>';
 var getflag = '<% get_parameter("flag"); %>';
 
+/*
+ * 只有带专用 action_mode 的请求才输出证书报告（见 Advanced_wyybin.asp 的
+ * unm_cert_check / unm_cert_regen）。普通保存/应用时 action_mode 是
+ * "Apply"/"Save" 或被 <form> 覆盖成空，这里什么都不输出，
+ * POST 的 Content-Length 与响应长度仍然对得上。
+ */
+var unm_action_mode = '<% get_parameter("action_mode"); %>';
+if(unm_action_mode == ' CheckCertWYYBIN ' || unm_action_mode == ' RegenCertWYYBIN '){
+	<% wyybin_cert(); %>
+}
+
 <% get_flash_time(); %>
 
 function done_validating(action){

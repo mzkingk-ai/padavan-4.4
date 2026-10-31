@@ -25,9 +25,32 @@
 <script>
 var $j = jQuery.noConflict();
 
+var wyybin_wl_text = {
+	on:  '当前开启：每个请求的完整 JSON 都会写入日志，体积增长很快，排查完请关掉。',
+	off: '当前关闭：日志只记启动信息和换源结果，体积很小。'
+};
+
 $j(document).ready(function() {
 
 	init_itoggle('wyybin_enable');
+	init_itoggle('wyybin_bu');
+	init_itoggle('wyybin_ba');
+	init_itoggle('wyybin_lv');
+	init_itoggle('wyybin_sef');
+	init_itoggle('wyybin_wl');
+	init_itoggle('wyybin_qq_enable');
+
+	function wyybin_wl_refresh() {
+		var on = $j('#wyybin_wl_fake').attr('checked') ? true : ($j('#wyybin_wl_fake').attr('value') == '1');
+		$j('#wyybin_wl_hint').text(wyybin_wl_text[on ? 'on' : 'off'])
+			.css('color', on ? '#c09853' : '#468847');
+	}
+
+	wyybin_wl_refresh();
+	// -wl 是几个开关里唯一会持续写盘的，切换后立刻提示当前状态
+	$j('#wyybin_wl_on_of').bind('click', function() {
+		setTimeout(wyybin_wl_refresh, 60);
+	});
 
 });
 
@@ -71,6 +94,56 @@ function applyRule(){
 
 function done_validating(action){
 	refreshpage();
+}
+
+/*
+ * 证书查询/生成走 start_apply.htm 的专用动作，不用 apply.cgi：
+ *   CheckCertWYYBIN   只读，返回脚本直接吐出的 key=value 文本行
+ *   RegenCertWYYBIN   强制删掉现有证书后重签（会换 CA，客户端要重装）
+ * 结果里的路径可能来自 U 盘，这里只做 HTML 转义，不做任何解析。
+ */
+function unm_cert_escape(s){
+	return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function unm_cert_show(s, ok, prelude){
+	var lines = String(s).split('\n');
+	var kept = [];
+	for (var i = 0; i < lines.length; i++){
+		if (lines[i].length)
+			kept.push(unm_cert_escape(lines[i]));
+	}
+	$j('#unm_cert_result').html(
+		(prelude ? '<b>' + prelude + '</b><br>' : '') +
+		'<div class="alert ' + (ok ? 'alert-success' : 'alert-error') + '" style="margin:0">' +
+		'<pre style="margin:0;border:0;background:transparent;padding:0;font-size:12px;">' +
+		kept.join('<br>') + '</pre></div>');
+}
+
+function unm_cert_post(action_mode, prelude){
+	$j('#unm_cert_result').html('<span style="color:#666">查询中…</span>');
+	$j.ajax({
+		type: 'post',
+		url: '/start_apply.htm',
+		data: { action_mode: action_mode },
+		dataType: 'text',
+		error: function(){
+			unm_cert_show('ERR|请求失败，请确认登录尚未过期', false, '');
+		},
+		success: function(resp){
+			unm_cert_show(resp, resp.indexOf('ERR|') !== 0, prelude);
+		}
+	});
+}
+
+function unm_cert_check(){
+	unm_cert_post(' CheckCertWYYBIN ', '');
+}
+
+function unm_cert_regen(){
+	if (!confirm('将按当前「已保存」的路径重新生成整套证书。\n\nCA 会变，装过旧 ca.crt 的客户端需要重新安装。\n确定继续？'))
+		return;
+	unm_cert_post(' RegenCertWYYBIN ', '已重新生成：');
 }
 
 </script>
@@ -234,10 +307,110 @@ function done_validating(action){
 										</tr>
 
 										<tr>
+										<th>功能开关</th>
+											<td>
+												<table cellpadding="2" cellspacing="0" border="0" style="width:auto">
+													<tr><th style="text-align:left;padding-right:10px"><b>-bu</b> 屏蔽升级提示</th>
+														<td><div class="main_itoggle"><div id="wyybin_bu_on_of">
+															<input type="checkbox" id="wyybin_bu_fake" <% if nvram_match("wyybin_bu","1") || nvram_get_x("", "wyybin_bu") == "": %>value=1 checked<% elif nvram_match("wyybin_bu","0"): %>value=0<% endif %> />
+														</div></div>
+														<div style="position: absolute; margin-left: -10000px;">
+															<input type="radio" value="1" name="wyybin_bu" id="wyybin_bu_1" class="input" <% if nvram_match("wyybin_bu","1") || nvram_get_x("", "wyybin_bu") == "": %>checked<% endif %> />
+															<input type="radio" value="0" name="wyybin_bu" id="wyybin_bu_0" class="input" <% if nvram_match("wyybin_bu","0"): %>checked<% endif %> />
+														</div></td></tr>
+													<tr><th style="text-align:left;padding-right:10px"><b>-ba</b> 去广告</th>
+														<td><div class="main_itoggle"><div id="wyybin_ba_on_of">
+															<input type="checkbox" id="wyybin_ba_fake" <% if nvram_match("wyybin_ba","1") || nvram_get_x("", "wyybin_ba") == "": %>value=1 checked<% elif nvram_match("wyybin_ba","0"): %>value=0<% endif %> />
+														</div></div>
+														<div style="position: absolute; margin-left: -10000px;">
+															<input type="radio" value="1" name="wyybin_ba" id="wyybin_ba_1" class="input" <% if nvram_match("wyybin_ba","1") || nvram_get_x("", "wyybin_ba") == "": %>checked<% endif %> />
+															<input type="radio" value="0" name="wyybin_ba" id="wyybin_ba_0" class="input" <% if nvram_match("wyybin_ba","0"): %>checked<% endif %> />
+														</div></td></tr>
+													<tr><th style="text-align:left;padding-right:10px"><b>-lv</b> 本地伪 VIP</th>
+														<td><div class="main_itoggle"><div id="wyybin_lv_on_of">
+															<input type="checkbox" id="wyybin_lv_fake" <% if nvram_match("wyybin_lv","1") || nvram_get_x("", "wyybin_lv") == "": %>value=1 checked<% elif nvram_match("wyybin_lv","0"): %>value=0<% endif %> />
+														</div></div>
+														<div style="position: absolute; margin-left: -10000px;">
+															<input type="radio" value="1" name="wyybin_lv" id="wyybin_lv_1" class="input" <% if nvram_match("wyybin_lv","1") || nvram_get_x("", "wyybin_lv") == "": %>checked<% endif %> />
+															<input type="radio" value="0" name="wyybin_lv" id="wyybin_lv_0" class="input" <% if nvram_match("wyybin_lv","0"): %>checked<% endif %> />
+														</div></td></tr>
+													<tr><th style="text-align:left;padding-right:10px"><b>-sef</b> 解锁音效</th>
+														<td><div class="main_itoggle"><div id="wyybin_sef_on_of">
+															<input type="checkbox" id="wyybin_sef_fake" <% if nvram_match("wyybin_sef","1") || nvram_get_x("", "wyybin_sef") == "": %>value=1 checked<% elif nvram_match("wyybin_sef","0"): %>value=0<% endif %> />
+														</div></div>
+														<div style="position: absolute; margin-left: -10000px;">
+															<input type="radio" value="1" name="wyybin_sef" id="wyybin_sef_1" class="input" <% if nvram_match("wyybin_sef","1") || nvram_get_x("", "wyybin_sef") == "": %>checked<% endif %> />
+															<input type="radio" value="0" name="wyybin_sef" id="wyybin_sef_0" class="input" <% if nvram_match("wyybin_sef","0"): %>checked<% endif %> />
+														</div></td></tr>
+													<tr><th style="text-align:left;padding-right:10px"><b>-wl</b> 打印请求全文</th>
+														<td><div class="main_itoggle"><div id="wyybin_wl_on_of">
+															<input type="checkbox" id="wyybin_wl_fake" <% if nvram_match("wyybin_wl","1"): %>value=1 checked<% elif nvram_match("wyybin_wl","0") || nvram_get_x("", "wyybin_wl") == "": %>value=0<% endif %> />
+														</div></div>
+														<div style="position: absolute; margin-left: -10000px;">
+															<input type="radio" value="1" name="wyybin_wl" id="wyybin_wl_1" class="input" <% if nvram_match("wyybin_wl","1"): %>checked<% endif %> />
+															<input type="radio" value="0" name="wyybin_wl" id="wyybin_wl_0" class="input" <% if nvram_match("wyybin_wl","0") || nvram_get_x("", "wyybin_wl") == "": %>checked<% endif %> />
+														</div></td></tr>
+												</table>
+												<br>未设置时按默认值：<b>-bu -ba -lv -sef 开启，-wl 关闭</b>。<br>
+												<b>-wl</b> 会把每个请求和响应的完整 JSON 写进 <b>/tmp/unblockneteasemusic.log</b>，
+												跑几小时就能写满内存盘，排查完请及时关掉（脚本每次启动时会把日志截断到最近 8MB）。
+											</td>
+										</tr>
+
+										<tr>
+										<th>QQ 音源</th>
+											<td>
+												<div class="main_itoggle"><div id="wyybin_qq_enable_on_of">
+													<input type="checkbox" id="wyybin_qq_enable_fake" <% if nvram_match("wyybin_qq_enable","1"): %>value=1 checked<% else %>value=0<% endif %> />
+												</div></div>
+												<div style="position: absolute; margin-left: -10000px;">
+													<input type="radio" value="1" name="wyybin_qq_enable" id="wyybin_qq_enable_1" class="input" <% if nvram_match("wyybin_qq_enable","1"): %>checked<% endif %> />
+													<input type="radio" value="0" name="wyybin_qq_enable" id="wyybin_qq_enable_0" class="input" <% if !nvram_match("wyybin_qq_enable","1"): %>checked<% endif %> />
+												</div>
+											</td>
+										</tr>
+
+										<tr>
 										<th>附加启动参数</th>
 											<td>
 												<input type="text" class="input" name="wyybin_extra" id="wyybin_extra" style="width: 300px" value="<% nvram_get_x("", "wyybin_extra"); %>" />
 												<br>留空即使用默认值。可用参数：<b>-e</b> 替换播放地址（固件已内置转发支持）、<b>-b</b> 强制最高音质、<b>-lv</b> 本地 VIP、<b>-sef</b> 解锁音效、<b>-ba</b> 屏蔽广告、<b>-sl N</b> 搜索数量(0-3)
+											</td>
+										</tr>
+
+										<tr>
+										<th>证书文件路径</th>
+											<td>
+												<input type="text" class="input" name="wyybin_cert" id="wyybin_cert" style="width: 340px" value="<% nvram_get_x("", "wyybin_cert"); %>" placeholder="/etc/storage/unblockneteasemusic/server.crt" />
+												<br>留空使用默认位置。可填 U 盘上的绝对路径（如 <b>/media/UDISK/unm/server.crt</b>），
+												也可只写文件名（相对默认目录）。<br>
+												<b>CA 证书</b>固定取该文件同目录下的 <b>ca.crt</b> / <b>ca.key</b>；
+												若两者都不存在，则把本文件同时当作 CA 与服务器证书（合并式自签证书）。
+											</td>
+										</tr>
+
+										<tr>
+										<th>私钥文件路径</th>
+											<td>
+												<input type="text" class="input" name="wyybin_key" id="wyybin_key" style="width: 340px" value="<% nvram_get_x("", "wyybin_key"); %>" placeholder="留空 = 证书同名 .key" />
+												<br>留空则自动使用与上面证书同名的 <b>.key</b>（<b>xxx.crt</b> → <b>xxx.key</b>），
+												找不到时回落到默认目录的 <b>ca.key</b>。填 U 盘路径时请与证书放在同一分区内。
+											</td>
+										</tr>
+
+										<tr>
+										<th>证书状态</th>
+											<td>
+												<input class="btn btn-info" type="button" value="检查证书" onclick="unm_cert_check()" />
+												&nbsp;
+												<input class="btn" type="button" value="按当前设置重新生成" onclick="unm_cert_regen()" />
+												<div id="unm_cert_result" style="margin-top: 8px; line-height: 1.6;"></div>
+												<br>
+												<b>证书怎么来：</b>第一次启动服务时，脚本在证书所在目录自动生成
+												<b>ca.crt / ca.key / server.crt / server.key</b>，有效期 3650 天；<br>
+												CA 一旦生成就<b>不再改变</b>，服务器证书在到期前 30 天自动重签（CA 不变，客户端无需重装）；<br>
+												把整个目录拷到 U 盘、把上面两个路径指到 U 盘，刷机、换机都不用重新给客户端装证书。<br>
+												<b>注意：</b>改完路径请先点「应用」让服务重启，再点「检查证书」——检查读的是已保存的配置。
 											</td>
 										</tr>
 

@@ -104,6 +104,8 @@ typedef u_int8_t u8;
 #define EVM_RESTART_WIREGUARD	(1ULL << 62)
 #define EVM_RESTART_SQM		    (1ULL << 63)
 #define EVM_RESTART_WYYBIN		(1ULL << 54)
+/* 未绑定到任何 events_desc 条目，只借它的 EVM_BLOCK_UNSAFE 位来做登录校验 */
+#define EVM_WYYBIN_CERT_ADMIN	(1ULL << 55)
 
 #define EVM_RESTART_REBOOT		(1ULL << 64)
 
