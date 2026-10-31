@@ -116,7 +116,9 @@ trunk/user/tcpdump/tcpdump-4.99.5/tcpdump
 *~
 
 # Downloaded tarballs
+# 这些源包由 Makefile 在本地缺失时自动下载，不进版本库（历史里也已清除）。
 trunk/user/aria2/aria2-1.37.0.tar.xz
+trunk/user/unblockneteasemusic/UnblockNeteaseMusic-*.tar.gz
 
 # Translation / locale generated
 trunk/user/miniupnpd/miniupnpd-2.3.7/config.h
