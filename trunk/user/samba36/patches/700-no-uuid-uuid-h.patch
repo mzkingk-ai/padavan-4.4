@@ -1,0 +1,30 @@
+--- a/lib/addns/dns.h
++++ b/lib/addns/dns.h
+@@ -50,8 +50,10 @@
+ #include <stdarg.h>
+ 
+ #ifdef HAVE_UUID_UUID_H
++#if defined(WITH_DNS_UPDATES)
+ #include <uuid/uuid.h>
+ #endif
++#endif
+ 
+ #ifdef HAVE_KRB5_H
+ #include <krb5.h>
+--- a/source3/utils/net_dns.c	2026-11-01 01:40:35.123523990 +0800
++++ b/source3/utils/net_dns.c	2026-11-01 01:40:35.124726543 +0800
+@@ -21,8 +21,13 @@
+ 
+ #include "includes.h"
+ #include "utils/net.h"
+-#include "../lib/addns/dns.h"
+ #include "utils/net_dns.h"
++/* lib/addns/dns.h 只在 WITH_DNS_UPDATES 下有用，而它无条件 include
++   <uuid/uuid.h>，本构建未启用 WITH_DNS_UPDATES 也没有 libuuid，
++   故移到下面同一个 #if 块内（padavan: samba36 no-uuid fix）。 */
++#if defined(WITH_DNS_UPDATES)
++#include "../lib/addns/dns.h"
++#endif
+ 
+ #if defined(WITH_DNS_UPDATES)
+ 
