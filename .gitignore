@@ -73,6 +73,8 @@ toolchain-mipsel/
 trunk/libs/*/*/
 trunk/user/*/*/
 trunk/user/*/src/*.o
+# ...except source patches, which are part of the build recipe
+!trunk/user/*/patches/
 
 # Specific user package build outputs
 trunk/user/antfs/antfs.ko

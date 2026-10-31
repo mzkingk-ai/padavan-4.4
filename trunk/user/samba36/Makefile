@@ -25,7 +25,10 @@ config_test:
 	fi )
 
 configure:
-	( test -d $(SRC_NAME) || { tar -xf $(SRC_DIR).tar.gz ; cat patches/*.patch | patch -d $(SRC_DIR) -r - -N -p1; }; \
+	( test -d $(SRC_NAME) || { tar -xf $(SRC_DIR).tar.gz ; \
+	  for p in patches/*.patch; do \
+	    patch -d $(SRC_DIR) -r - -N -p1 < $$p || echo "  samba36: $$p 已应用，跳过"; \
+	  done; }; \
 	cd $(SRC_NAME) && \
 	ac_cv_lib_attr_getxattr=no \
 	ac_cv_search_getxattr=no \

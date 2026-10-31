@@ -16,6 +16,10 @@ extract_test:
 	( if [ ! -d $(SRC_NAME) ]; then \
 		tar zxf $(SRC_NAME).tar.gz; \
 	fi )
+	( for p in patches/*.patch; do \
+	    [ -f "$$p" ] || continue; \
+	    patch -d $(SRC_NAME) -r - -N -p1 < $$p || echo "  ntfs-3g: $$p 已应用，跳过"; \
+	  done )
 
 config_test:
 	( if [ -f ./config_done ]; then \

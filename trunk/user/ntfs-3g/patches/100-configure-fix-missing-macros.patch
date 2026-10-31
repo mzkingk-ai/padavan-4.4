@@ -1,0 +1,15 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -332,6 +332,12 @@
+ 
+ # Autodetect whether we can build crypto stuff or not.
+ compile_crypto=false
++m4_ifndef([AM_PATH_LIBGCRYPT],
++	[AC_DEFUN([AM_PATH_LIBGCRYPT],[$3])
++])dnl
++m4_ifndef([PKG_CHECK_MODULES],
++	[AC_DEFUN([PKG_CHECK_MODULES],[$4])
++])dnl
+ if test "$enable_crypto" != "no"; then
+ 	have_libgcrypt=false
+ 	AM_PATH_LIBGCRYPT(1.2.2, [ have_libgcrypt=true ],
