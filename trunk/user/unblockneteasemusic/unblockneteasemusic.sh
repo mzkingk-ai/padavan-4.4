@@ -14,14 +14,52 @@ UNM_DIR="/etc/storage/unblockneteasemusic"
 UNM_CSR="$UNM_DIR/server.csr"
 UNM_EXT="$UNM_DIR/ext.cnf"
 
-# 证书位置由页面的两个输入框（nvram: wyybin_cert / wyybin_key）决定，
-# 每项都支持三种写法：
-#   ① 留空              → 用默认值 <UNM_DIR>/xxx，即老版本的行为
-#   ② 绝对路径          → 直接使用该文件，例如 /media/UDISK/unm/ca.crt
-#   ③ 只写文件名的相对路径 → 视为相对于 UNM_DIR，例如 unm/ca.crt
-# 证书放在 U 盘上是最实用的用法：U 盘挂载点 /media/<分区标签> 不随固件升级
-# 被清空，所以刷机后 CA 仍然是同一套，客户端不用重新安装。
-# 注意：必须以证书文件（*.crt，CA 或带私钥的合并证书）为单位，不要写目录。
+# 本机 LAN 地址，用于转发模式把音乐域名指过来
+unm_getip() {
+	local ip
+
+	ip=$(nvram get lan_ipaddr)
+	[ -z "$ip" ] && ip=$(ip -4 addr show br0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
+	echo "$ip"
+}
+
+# 停止服务：先按 pid 文件优雅退出，再用进程名兜底，最后清理 hosts/dns 劫持。
+# 清理劫持是必须的，否则 failover 后域名仍指向本机、而服务已停，客户端会连不上。
+unm_stop() {
+	local pid p i
+
+	pid=$(cat "$UNM_PID" 2>/dev/null)
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		logger -t "网易云解锁" "正在停止服务 (pid $pid)"
+		kill "$pid" 2>/dev/null
+		i=0
+		while [ $i -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+			i=$((i + 1))
+			sleep 1
+		done
+		kill -9 "$pid" 2>/dev/null
+	fi
+	rm -f "$UNM_PID"
+
+	# 兜底：按进程名清理（UPX 解包后进程名仍为 UnblockNeteaseMusic）
+	for p in $(pidof UnblockNeteaseMusic 2>/dev/null); do
+		kill -9 "$p" 2>/dev/null
+	done
+
+	unm_unhook_hosts
+	unm_unhook_dns
+}
+
+# 证书目录由页面的一个输入框（nvram: wyybin_cert）决定，默认就是
+# /etc/storage/unblockneteasemusic —— 也就是 /etc/storage 持久化分区，
+# 重启、刷固件都不会丢。可以改成别的目录（例如 /media/UDISK/unm），
+# 改完只要那里有完整的一套文件就能直接用，没有则自动生成一套。
+# 目录里固定使用这 4 个文件名，全部有效期为 3650 天：
+#   ca.crt      自签根证书，装到客户端
+#   ca.key      根证书私钥
+#   server.crt  服务器证书（由 ca.key 签发）
+#   server.key  服务器证书私钥
+# ca.srl / server.csr / ext.cnf 是签发过程中的临时文件，可删。
 unm_abspath() {
 	case "$1" in
 		/*) echo "$1" ;;
@@ -30,36 +68,20 @@ unm_abspath() {
 }
 
 unm_resolve_cert_paths() {
-	local c k
+	local d
 
-	c=$(nvram get wyybin_cert)
-	k=$(nvram get wyybin_key)
+	d=$(nvram get wyybin_cert)
+	[ -n "$d" ] || d="$UNM_DIR"
+	UNM_CERT_DIR=$(unm_abspath "$d")
+	# 去掉尾部多余的斜杠，避免拼出 //ca.crt 这种路径
+	while [ "$UNM_CERT_DIR" != "/" ] && [ "${UNM_CERT_DIR%/}" != "$UNM_CERT_DIR" ]; do
+		UNM_CERT_DIR="${UNM_CERT_DIR%/}"
+	done
 
-	[ -n "$c" ] || c="$UNM_DIR/server.crt"
-	UNM_CERT=$(unm_abspath "$c")
-
-	# 私钥留空时取与证书同名的 .key（server.crt → server.key）。
-	# 不要在这里去猜 ca.key：CA 私钥只在签服务器证书时才用，
-	# 拿它当服务器私钥既配不上证书，也会在签发时把 CA 私钥覆盖掉。
-	if [ -n "$k" ]; then
-		UNM_KEY=$(unm_abspath "$k")
-	else
-		UNM_KEY="${UNM_CERT%.crt}.key"
-	fi
-
-	# 服务器证书与私钥指向同一文件 = 自签合并证书（crt 里同时含私钥），
-	# 此时它自己充任 CA，CA 私钥也复用这一份。
-	if [ "$UNM_CERT" = "$UNM_KEY" ]; then
-		UNM_CA="$UNM_CERT"
-		UNM_CAKEY="$UNM_KEY"
-		return 0
-	fi
-
-	# 常规布局：CA 与服务器证书同目录，名为 ca.crt / ca.key。
-	# 注意不能拿「ca.crt 是否存在」来决定 CA 路径，否则首次生成时
-	# CA 会被写到 ca.key 上（路径推导一致，但两个变量会互相覆盖）。
-	UNM_CA="$(dirname "$UNM_CERT")/ca.crt"
-	UNM_CAKEY="$(dirname "$UNM_CERT")/ca.key"
+	UNM_CA="$UNM_CERT_DIR/ca.crt"
+	UNM_CAKEY="$UNM_CERT_DIR/ca.key"
+	UNM_CERT="$UNM_CERT_DIR/server.crt"
+	UNM_KEY="$UNM_CERT_DIR/server.key"
 }
 
 # 已有证书「还能不能接着用」的统一判定。
@@ -145,17 +167,13 @@ unm_gen_server_cert() {
 }
 
 unm_check_cert() {
-	local cdir kdir
-
 	UNM_LAST_ERR=""
 	unm_resolve_cert_paths
-	cdir=$(dirname "$UNM_CERT")
-	kdir=$(dirname "$UNM_KEY")
 
 	# ---- ① 已有且可用的证书：原样复用，一个字节都不动 ----
 	if unm_cert_usable; then
 		if unm_cert_matches_ca && unm_key_matches_cert; then
-			logger -t "网易云解锁" "证书可复用：$UNM_CERT（到期 $(openssl x509 -in "$UNM_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)）"
+			logger -t "网易云解锁" "证书可复用：$UNM_CERT_DIR（到期 $(openssl x509 -in "$UNM_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)）"
 			return 0
 		fi
 		logger -t "网易云解锁" "证书与私钥/CA 不匹配，准备重新签发"
@@ -163,16 +181,21 @@ unm_check_cert() {
 		logger -t "网易云解锁" "证书缺失、损坏或 30 天内到期，准备生成"
 	fi
 
-	# ---- ② 目标目录必须可写（U 盘没挂载是最常见的原因）----
-	[ -d "$cdir" ] || mkdir -p "$cdir" 2>/dev/null
-	[ -d "$kdir" ] || mkdir -p "$kdir" 2>/dev/null
-	if [ ! -w "$cdir" ]; then
-		UNM_LAST_ERR="证书目录不可写：$cdir（U 盘是否已挂载？）"
-		logger -t "网易云解锁" "警告：$UNM_LAST_ERR"
-		return 1
+	# ---- ② 证书目录必须存在且可写 ----
+	# 只补建最后一层目录，不能 mkdir -p 出一整条路径：
+	# U 盘拔掉后 /media/UDISK 不存在，而 mkdir -p 会在根文件系统上
+	# 重新造出这个目录并写入一套新证书 —— 等 U 盘插回来又是另一套 CA，
+	# 客户端装的 CA 就对不上了。所以父目录不存在时直接按「没挂载」处理。
+	if [ ! -d "$UNM_CERT_DIR" ]; then
+		if [ ! -d "$(dirname "$UNM_CERT_DIR")" ]; then
+			UNM_LAST_ERR="证书目录不存在：$UNM_CERT_DIR（U 盘未挂载或路径写错）"
+			logger -t "网易云解锁" "警告：$UNM_LAST_ERR"
+			return 1
+		fi
+		mkdir -p "$UNM_CERT_DIR" 2>/dev/null
 	fi
-	if [ ! -w "$kdir" ]; then
-		UNM_LAST_ERR="私钥目录不可写：$kdir（U 盘是否已挂载？）"
+	if [ ! -w "$UNM_CERT_DIR" ]; then
+		UNM_LAST_ERR="证书目录不可写：$UNM_CERT_DIR（U 盘是否只读挂载？）"
 		logger -t "网易云解锁" "警告：$UNM_LAST_ERR"
 		return 1
 	fi
@@ -469,12 +492,13 @@ status)
 	fi
 	;;
 cert)
-	# 输出生效的证书/私钥路径与状态，页面「证书状态」用
+	# 输出生效的证书目录与状态，页面「证书状态」用
 	unm_resolve_cert_paths
 	if unm_check_cert; then
-		echo "OK|cert=$UNM_CERT|key=$UNM_KEY"
+		echo "OK|dir=$UNM_CERT_DIR"
 		echo "END=$(openssl x509 -in "$UNM_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)"
 		echo "SUBJ=$(openssl x509 -in "$UNM_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+		echo "FILES=$(ls -1 "$UNM_CERT_DIR" 2>/dev/null | tr '\n' ' ')"
 	else
 		echo "ERR|$UNM_LAST_ERR"
 	fi
@@ -483,17 +507,13 @@ regen)
 	# 强制重签：删掉现有证书后按同样的流程重建。
 	# 这是唯一会更换 CA 的入口，页面上的按钮带二次确认。
 	unm_resolve_cert_paths
-	if [ -n "$UNM_CERT" ] && [ "$UNM_CERT" != "$UNM_KEY" ]; then
-		rm -f "$UNM_CERT" "$UNM_CA" "$UNM_CAKEY" "$UNM_KEY" "$UNM_CSR" "$UNM_EXT"
-	else
-		# 合并式自签证书（证书=私钥同一文件）不能先删，否则私钥也没了
-		rm -f "$UNM_CERT" "$UNM_CSR" "$UNM_EXT"
-	fi
+	rm -f "$UNM_CERT" "$UNM_CA" "$UNM_CAKEY" "$UNM_KEY" "$UNM_CSR" "$UNM_EXT"
 	logger -t "网易云解锁" "按页面请求强制重新生成证书"
 	if unm_check_cert; then
-		echo "OK|cert=$UNM_CERT|key=$UNM_KEY"
+		echo "OK|dir=$UNM_CERT_DIR"
 		echo "END=$(openssl x509 -in "$UNM_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)"
 		echo "SUBJ=$(openssl x509 -in "$UNM_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+		echo "FILES=$(ls -1 "$UNM_CERT_DIR" 2>/dev/null | tr '\n' ' ')"
 	else
 		echo "ERR|$UNM_LAST_ERR"
 	fi

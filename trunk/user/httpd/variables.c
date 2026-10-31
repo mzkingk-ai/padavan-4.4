@@ -988,7 +988,6 @@
 			{"wyybin_extra", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_minscore", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_cert", "", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_key", "", NULL, EVM_RESTART_WYYBIN},
 			// wyybin_bu / wyybin_ba / wyybin_lv / wyybin_sef / wyybin_wl 都是开关型参数。
 			// 页面上的复选框未勾选时不会提交，draft 会据此补上默认值，
 			// 所以默认值必须是期望的初始状态，否则用户取消勾选后会被重置。

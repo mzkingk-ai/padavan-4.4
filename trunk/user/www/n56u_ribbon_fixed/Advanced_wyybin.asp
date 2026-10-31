@@ -379,22 +379,34 @@ function unm_cert_regen(){
 										</tr>
 
 										<tr>
-										<th>证书文件路径</th>
+										<th>证书目录</th>
 											<td>
-												<input type="text" class="input" name="wyybin_cert" id="wyybin_cert" style="width: 340px" value="<% nvram_get_x("", "wyybin_cert"); %>" placeholder="/etc/storage/unblockneteasemusic/server.crt" />
-												<br>留空使用默认位置。可填 U 盘上的绝对路径（如 <b>/media/UDISK/unm/server.crt</b>），
-												也可只写文件名（相对默认目录）。<br>
-												<b>CA 证书</b>固定取该文件同目录下的 <b>ca.crt</b> / <b>ca.key</b>；
-												若两者都不存在，则把本文件同时当作 CA 与服务器证书（合并式自签证书）。
+												<input type="text" class="input" name="wyybin_cert" id="wyybin_cert" style="width: 340px" value="<% nvram_get_x("", "wyybin_cert"); %>" placeholder="/etc/storage/unblockneteasemusic" />
+												<br>留空即默认目录 <b>/etc/storage/unblockneteasemusic</b>。
+												它在 <b>/etc/storage</b> 持久化分区里，<b>重启、刷固件都不会丢</b>。<br>
+												想放到 U 盘就填如 <b>/media/UDISK/unm</b>（挂载点见「USB 应用 - 磁盘」页）。
+												只写相对路径时按相对默认目录处理。
 											</td>
 										</tr>
 
 										<tr>
-										<th>私钥文件路径</th>
+										<th>目录内需要的文件</th>
 											<td>
-												<input type="text" class="input" name="wyybin_key" id="wyybin_key" style="width: 340px" value="<% nvram_get_x("", "wyybin_key"); %>" placeholder="留空 = 证书同名 .key" />
-												<br>留空则自动使用与上面证书同名的 <b>.key</b>（<b>xxx.crt</b> → <b>xxx.key</b>），
-												找不到时回落到默认目录的 <b>ca.key</b>。填 U 盘路径时请与证书放在同一分区内。
+												<table cellpadding="3" cellspacing="0" border="0" style="width:auto">
+													<tr><th style="text-align:left;padding-right:12px"><b>ca.crt</b></th>
+														<td>自签根证书，<b>装到客户端</b>的就是这个</td></tr>
+													<tr><th style="text-align:left;padding-right:12px"><b>ca.key</b></th>
+														<td>根证书私钥，由它签发服务器证书</td></tr>
+													<tr><th style="text-align:left;padding-right:12px"><b>server.crt</b></th>
+														<td>服务器证书，供本机 HTTPS 端口使用</td></tr>
+													<tr><th style="text-align:left;padding-right:12px"><b>server.key</b></th>
+														<td>服务器证书私钥</td></tr>
+												</table>
+												<br>这 4 个文件名固定，<b>有效期都是 3650 天</b>，四个齐全才算一套可用证书；
+												缺少任何一个都会按「目录不完整」处理并重新生成。<br>
+												<b>ca.srl</b> / <b>server.csr</b> / <b>ext.cnf</b> 是签发过程中的临时文件，可以删掉。<br>
+												<b>目录怎么来：</b>第一次启动服务时脚本会在该目录自动生成这四个文件；
+												也可以自己用 openssl 签一套放进目录，只要 <b>server.crt 由 ca.crt 对应的私钥签发</b>即可。
 											</td>
 										</tr>
 
@@ -406,11 +418,10 @@ function unm_cert_regen(){
 												<input class="btn" type="button" value="按当前设置重新生成" onclick="unm_cert_regen()" />
 												<div id="unm_cert_result" style="margin-top: 8px; line-height: 1.6;"></div>
 												<br>
-												<b>证书怎么来：</b>第一次启动服务时，脚本在证书所在目录自动生成
-												<b>ca.crt / ca.key / server.crt / server.key</b>，有效期 3650 天；<br>
-												CA 一旦生成就<b>不再改变</b>，服务器证书在到期前 30 天自动重签（CA 不变，客户端无需重装）；<br>
-												把整个目录拷到 U 盘、把上面两个路径指到 U 盘，刷机、换机都不用重新给客户端装证书。<br>
-												<b>注意：</b>改完路径请先点「应用」让服务重启，再点「检查证书」——检查读的是已保存的配置。
+												<b>复用规则：</b>证书一旦生成就<b>不再改变</b>，客户端装过一次 <b>ca.crt</b> 之后一直有效；<br>
+												只有四个文件齐全且都没过期才复用，服务器证书在到期前 30 天自动重签（<b>CA 不变，客户端无需重装</b>）；<br>
+												CA 本身也过期或损坏时才会整套重签，此时客户端需要重新安装 <b>ca.crt</b>。<br>
+												<b>注意：</b>改完目录请先点「应用」让服务重启，再点「检查证书」——检查读的是已保存的配置。
 											</td>
 										</tr>
 
@@ -425,7 +436,7 @@ function unm_cert_regen(){
 									<div class="alert alert-warning" style="margin: 10px;">
 									<p><b>两种用法</b><br>
 									<b>一、转发模式开启（推荐）：</b>客户端什么都不用设置，本机自动把网易云音乐的域名指到路由器。
-									需要把路由器上的 <b>/etc/storage/unblockneteasemusic/ca.crt</b> 装到客户端并设为受信任根证书
+									需要把证书目录里的 <b>ca.crt</b>（默认在 <b>/etc/storage/unblockneteasemusic/ca.crt</b>）装到客户端并设为受信任根证书
 									（安卓 7+ 还需装到「系统凭证」或用 Magisk 模块，iOS 需在「关于本机 → 证书信任设置」里手动开启）。<br>
 									<b>二、转发模式关闭：</b>手工把客户端代理指向本路由 —— 手机 Wi-Fi 里设「HTTP 代理」= 本路由 IP + 上面的 HTTP 端口；
 									电脑用 <b>Proxy SwitchyOmega</b> 等工具只把网易云音乐的域名转发过来。<br>
