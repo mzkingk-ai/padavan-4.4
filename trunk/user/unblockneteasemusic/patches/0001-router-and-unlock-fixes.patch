@@ -1,3 +1,4 @@
+diff -ruN a/app.go b/app.go
 --- a/app.go
 +++ b/app.go
 @@ -67,8 +67,11 @@
@@ -13,6 +14,7 @@
  			<-exit
  			log.Println("exiting UnblockNeteaseMusic")
  		}
+diff -ruN a/common/common.go b/common/common.go
 --- a/common/common.go
 +++ b/common/common.go
 @@ -87,6 +87,12 @@
@@ -28,6 +30,7 @@
  var (
  	ProxyIp     = "127.0.0.1"
  	ProxyDomain = map[string]string{
+diff -ruN a/config/config.go b/config/config.go
 --- a/config/config.go
 +++ b/config/config.go
 @@ -8,7 +8,7 @@
@@ -71,6 +74,7 @@
  	currentPath, err := utils.GetCurrentPath()
  	if err != nil {
  		log.Println(err)
+diff -ruN a/host/host.go b/host/host.go
 --- a/host/host.go
 +++ b/host/host.go
 @@ -199,7 +199,17 @@
@@ -92,6 +96,7 @@
  		}
  		common.HostDomain[domain] = rAddr.IP.String()
  
+diff -ruN a/processor/processor.go b/processor/processor.go
 --- a/processor/processor.go
 +++ b/processor/processor.go
 @@ -121,12 +121,22 @@
@@ -123,6 +128,7 @@
  		}
  		netease.Path = strings.ReplaceAll(netease.Path, "https://music.163.com", "")
  		netease.Path = strings.ReplaceAll(netease.Path, "http://music.163.com", "")
+diff -ruN a/provider/base/base.go b/provider/base/base.go
 --- a/provider/base/base.go
 +++ b/provider/base/base.go
 @@ -2,9 +2,11 @@
@@ -180,34 +186,294 @@
 +	}
 +	return kept
 +}
+diff -ruN a/provider/base/score_filter_test.go b/provider/base/score_filter_test.go
+--- a/provider/base/score_filter_test.go
++++ b/provider/base/score_filter_test.go
+@@ -0,0 +1,33 @@
++package base
++
++import (
++	"testing"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
++)
++
++func TestFilterByScore(t *testing.T) {
++	old := common.MinMatchScore
++	defer func() { common.MinMatchScore = old }()
++
++	common.MinMatchScore = 0.75
++	in := []*common.Song{
++		{Name: "晴天", Artist: "周杰伦", MatchScore: 1.0, Source: "kuwo"},
++		{Name: "晴天", Artist: "陈星晨", MatchScore: 0.65, Source: "kuwo"},
++		{Name: "晴天", Artist: "某人", MatchScore: 0.74, Source: "kugou"},
++		{Name: "晴天", Artist: "边界", MatchScore: 0.75, Source: "migu"},
++	}
++	out := FilterByScore(in)
++	if len(out) != 2 {
++		t.Fatalf("want 2 kept, got %d", len(out))
++	}
++	if out[0].Artist != "周杰伦" || out[1].Artist != "边界" {
++		t.Fatalf("wrong keep set: %+v", out)
++	}
++
++	// 阈值 0 表示关闭过滤，恢复上游行为
++	common.MinMatchScore = 0
++	if got := FilterByScore(in); len(got) != len(in) {
++		t.Fatalf("disabled filter should keep all, got %d", len(got))
++	}
++}
+diff -ruN a/provider/base/score_test.go b/provider/base/score_test.go
+--- a/provider/base/score_test.go
++++ b/provider/base/score_test.go
+@@ -0,0 +1,54 @@
++package base
++
++import (
++	"testing"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
++)
++
++// 用真机上抓到的实际案例做回归：
++// 《晴天》(186016) 搜酷我，第一条是「晴天(KTV版伴奏)」，另有翻唱
++// 「陈星晨 - Future War未来战争」曾拿到 0.65 分被上游直接采纳。
++func TestCalScoreRejectsCover(t *testing.T) {
++	target := common.SearchSong{
++		Keyword:     "晴天 周杰伦",
++		Name:        "晴天",
++		ArtistsName: "周杰伦",
++		OrderBy:     common.MatchedScoreDesc,
++	}
++	cases := []struct {
++		name, song, artist string
++		wantOK             bool
++	}{
++		{"原唱", "晴天", "周杰伦", true},
++		{"原唱带后缀", "晴天 (Live)", "周杰伦", false}, // 上游把 LIVE 当独立关键词，不在本次修复范围内
++		{"伴奏", "晴天(KTV版伴奏)", "周杰伦", false},
++		{"翻唱", "晴天", "陈星晨", true}, // CalScore 允许，由 provider.filterByScore 按 0.75 阈值拦下
++		{"完全无关", "Future War未来战争", "陈星晨", false},
++	}
++	for _, c := range cases {
++		score, ok := CalScore(target, c.song, c.artist, 0, 5)
++		if ok != c.wantOK {
++			t.Errorf("%s: ok=%v want %v (score=%.2f)", c.name, ok, c.wantOK, score)
++		}
++		t.Logf("%s: song=%q artist=%q => score=%.2f ok=%v", c.name, c.song, c.artist, score, ok)
++	}
++}
++
++// 超短候选名出现在长目标名里时应被歌名门槛拦下，而不是靠歌手兜底
++func TestCalScoreShortNameInLongName(t *testing.T) {
++	target := common.SearchSong{
++		Keyword:     "夜曲 周杰伦",
++		Name:        "夜曲",
++		ArtistsName: "周杰伦",
++		OrderBy:     common.MatchedScoreDesc,
++	}
++	if score, ok := CalScore(target, "夜曲", "群星", 0, 5); ok {
++		t.Logf("score=%.2f", score)
++	}
++	// 歌手完全不同时，综合分不应达到阈值
++	score, ok := CalScore(target, "夜曲", "某人", 0, 5)
++	if ok && score >= common.MinMatchScore {
++		t.Errorf("翻唱不应过阈值: score=%.2f", score)
++	}
++}
+diff -ruN a/provider/kuwo/kuwo_endtoend_test.go b/provider/kuwo/kuwo_endtoend_test.go
+--- a/provider/kuwo/kuwo_endtoend_test.go
++++ b/provider/kuwo/kuwo_endtoend_test.go
+@@ -0,0 +1,88 @@
++package kuwo
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
++)
++
++// 这段是 2026-10-31 从酷我 PC 搜索接口实际抓下来的「晴天 周杰伦」原始响应片段，
++// 7 条里没有正版原唱（周杰伦的歌在酷我基本无版权），最能代表真实困境。
++// 注意它是单引号伪 JSON，不能用 json.Unmarshal，正好也验证 ParsePcAbsList 的手解能力。
++const samplePcBody = `{'ARTISTPIC':'','HIT':'3589','abslist':[
++{'AARTIST':'Jay&nbsp;Chou','ALBUM':'','ARTIST':'周杰伦','COPYRIGHT':'0','DC_TARGETID':'51685512','FORMATS':'AAC48|MP3128|MP3H','MINFO':'level:p,bitrate:320,format:mp3,size:10.3Mb','MUSICRID':'MUSIC_51685512','SONGNAME':'晴天&nbsp;(KTV版伴奏)'},
++{'AARTIST':'','ALBUM':'','ARTIST':'周杰伦\\u0026五月天','COPYRIGHT':'0','DC_TARGETID':'152809941','FORMATS':'AAC48|MP3128','MINFO':'level:h,bitrate:128,format:mp3,size:12.01Mb','MUSICRID':'MUSIC_152809941','SONGNAME':'志明与春娇+晴天&nbsp;(2013小巨蛋演唱会第三场)'},
++{'AARTIST':'','ALBUM':'','ARTIST':'周杰伦\\u0026인피니트','COPYRIGHT':'0','DC_TARGETID':'190706031','FORMATS':'AAC48','MINFO':'level:s,bitrate:48,format:aac,size:88.79Kb','MUSICRID':'MUSIC_190706031','SONGNAME':'新歌前奏&nbsp;+&nbsp;晴天&nbsp;(片段)'},
++{'AARTIST':'','ALBUM':'','ARTIST':'周杰伦','COPYRIGHT':'0','DC_TARGETID':'474678847','FORMATS':'AAC48|MP3128','MINFO':'level:p,bitrate:192,format:ogg,size:4.32Mb','MUSICRID':'MUSIC_474678847','SONGNAME':'花海&nbsp;(DJ&nbsp;阿若版)'},
++{'AARTIST':'','ALBUM':'','ARTIST':'周杰伦','COPYRIGHT':'0','DC_TARGETID':'349354644','FORMATS':'AAC48|MP3128','MINFO':'level:h,bitrate:128,format:mp3,size:4.16Mb','MUSICRID':'MUSIC_349354644','SONGNAME':'听妈妈的话&nbsp;(完整版|DJ彭鹏版)'},
++{'AARTIST':'','ALBUM':'','ARTIST':'周杰伦','COPYRIGHT':'0','DC_TARGETID':'367887397','FORMATS':'AAC48|MP3128|MP3H','MINFO':'level:p,bitrate:320,format:mp3,size:8.26Mb','MUSICRID':'MUSIC_367887397','SONGNAME':'蜗牛'},
++{'AARTIST':'','ALBUM':'','ARTIST':'冬菇滑稽','COPYRIGHT':'0','DC_TARGETID':'380476932','FORMATS':'AAC48','MINFO':'level:s,bitrate:48,format:aac,size:100Kb','MUSICRID':'MUSIC_380476932','SONGNAME':'晴天&nbsp;(原唱:周杰伦)&nbsp;激情吃力版'}
++]}`
++
++func startSampleServer(t *testing.T) string {
++	t.Helper()
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(samplePcBody))
++	}))
++	t.Cleanup(srv.Close)
++	return srv.URL + "/r.s?all=%s"
++}
++
++// 修复前：songs[0]（KTV 版伴奏）被无条件采纳，用户听到的是伴奏。
++// 修复后：解析真实搜索结果，所有候选都过不了阈值，结果必须是空——宁可无歌。
++func TestParseSongRejectsAllFromRealSample(t *testing.T) {
++	tmpl := startSampleServer(t)
++	old := SearchSongURL
++	SearchSongURL = tmpl
++	defer func() { SearchSongURL = old }()
++
++	searchSong := common.SearchSong{
++		Keyword:     "晴天 周杰伦",
++		Name:        "晴天",
++		ArtistsName: "周杰伦",
++		ArtistList:  []string{"周杰伦"},
++		Quality:     common.ExHigh,
++		OrderBy:     common.MatchedScoreDesc,
++	}
++
++	songs := (&KuWo{}).SearchSong(searchSong)
++	for _, s := range songs {
++		t.Logf("scored: %.2f %q - %q", s.MatchScore, s.Artist, s.Name)
++	}
++	if len(songs) != 0 {
++		t.Fatalf("样本里没有原唱，应当全部拒绝，却得到 %d 条，首条是 %q - %q (%.2f)",
++			len(songs), songs[0].Artist, songs[0].Name, songs[0].MatchScore)
++	}
++}
++
++// 阈值关闭时应恢复上游行为：连 KTV 版伴奏都会入选（上游就是这样把伴奏当原唱返回的）
++func TestParseSongFilterIsThresholdDriven(t *testing.T) {
++	tmpl := startSampleServer(t)
++	oldURL := SearchSongURL
++	oldScore := common.MinMatchScore
++	SearchSongURL = tmpl
++	common.MinMatchScore = 0
++	defer func() {
++		SearchSongURL = oldURL
++		common.MinMatchScore = oldScore
++	}()
++
++	searchSong := common.SearchSong{
++		Keyword:     "晴天 周杰伦",
++		Name:        "晴天",
++		ArtistsName: "周杰伦",
++		ArtistList:  []string{"周杰伦"},
++		Quality:     common.ExHigh,
++		OrderBy:     common.PlatformDefault,
++	}
++	songs := (&KuWo{}).SearchSong(searchSong)
++	if len(songs) == 0 {
++		t.Fatal("阈值关闭时应当仍能列出候选")
++	}
++	for _, s := range songs {
++		t.Logf("threshold off -> %q - %q %.2f", s.Artist, s.Name, s.MatchScore)
++	}
++}
+diff -ruN a/provider/kuwo/kuwo.go b/provider/kuwo/kuwo.go
 --- a/provider/kuwo/kuwo.go
 +++ b/provider/kuwo/kuwo.go
-@@ -21,9 +21,8 @@
+@@ -21,9 +21,17 @@
  
  type KuWo struct{}
  
 -const (
 -	SearchSongURL = "http://search.kuwo.cn/r.s?&correct=1&stype=comprehensive&encoding=utf8&rformat=json&mobi=1&show_copyright_off=1&searchapi=6&all=%s"
 -)
-+// SearchSongURL 是带一个 %s 占位符的模板，可用 file:// 指向本地样本做回归测试
-+var SearchSongURL = "http://search.kuwo.cn/r.s?&correct=1&stype=comprehensive&encoding=utf8&rformat=json&mobi=1&show_copyright_off=1&searchapi=6&all=%s"
++// SearchSongURL 是带一个 %s 占位符的模板，可用 file:// 指向本地样本做回归测试。
++//
++// 用 PC 接口（itemset=web_2013&rn=30）而不是上游的 mobi 接口，原因（实测 2026-10-31）：
++//   - mobi 档只有 7~20 条结果，且上游只取前 min(len/2+1,5) 条。歌名+歌手组合搜时
++//     酷我把大量翻唱顶在前面，真正的原唱经常排在 5 条之后（如「成都 赵雷」原唱在第 2 条，
++//     但同名前 5 条全是伴奏/DJ/合唱版本）；
++//   - PC 接口固定返回 30 条，还多了 COPYRIGHT/FORMATS/PLAYCNT 等字段。
++//
++// 注意这个接口返回的是单引号「伪 JSON」，json.Unmarshal 解析不了，必须走下面的
++// ParsePcAbsList 手解，不能像上游那样直接用 base.Fetch。
++var SearchSongURL = "http://search.kuwo.cn/r.s?&all=%s&ft=music&itemset=web_2013&client=kt&pn=0&rn=30&rformat=json&encoding=utf8"
  
  var blockSongUrl = map[string]json.Number{
  	"2914632520.mp3":  "7",
-@@ -91,6 +90,12 @@
+@@ -35,6 +43,9 @@
+ 
+ func (m *KuWo) SearchSong(song common.SearchSong) (songs []*common.Song) {
+ 	song = base.PreSearchSong(song)
++	// 每次搜索都重新建表：包级 map 跨请求复用会把上一次的结果带过来
++	// （曾出现同一批 7 条候选被重复扫描两遍）。
++	seen := make(map[string]struct{}, 32)
+ 	keyWordList := utils.Combination(song.ArtistList)
+ 	wg := sync.WaitGroup{}
+ 	for _, v := range keyWordList {
+@@ -51,26 +62,27 @@
+ 			//header["referer"] = append(header["referer"], "http://www.kuwo.cn/search/list?key="+url.QueryEscape(keyWord))
+ 			//header["csrf"] = append(header["csrf"], token)
+ 			//header["cookie"] = append(header["cookie"], "kw_token="+token)
+-			searchUrl := fmt.Sprintf(SearchSongURL, keyWord)
+-			result, err := base.Fetch(searchUrl, nil, header, true)
++			searchUrl := fmt.Sprintf(SearchSongURL, url.QueryEscape(keyWord))
++			list, err := FetchPcAbsList(searchUrl, header)
+ 			if err != nil {
+ 				log.Println(err)
+ 				return
+ 			}
+-			list, ok := result["content"].(common.SliceType)[1].(common.MapType)["musicpage"].(common.MapType)["abslist"].(common.SliceType)
+-			if ok {
+-				if ok && len(list) > 0 {
+-					listLength := len(list)
+-					maxIndex := listLength/2 + 1
+-					if maxIndex > 5 {
+-						maxIndex = 5
++			if len(list) > 0 {
++				// 上游只取前 min(len/2+1,5) 条。PC 接口固定 30 条，
++				// 原唱经常被一堆伴奏/DJ/合唱顶到第 6 条以后，故放宽到 kuwoMaxScan。
++				// 真正的把关交给 CalScore 的歌名门槛 + MinMatchScore 阈值。
++				maxIndex := kuwoMaxScan
++				if len(list) < maxIndex {
++					maxIndex = len(list)
++				}
++				for index, matched := range list {
++					if index >= maxIndex {
++						break
+ 					}
+-					for index, matched := range list {
+-						if index >= maxIndex { //kuwo list order by score default
+-							break
+-						}
+-						kuWoSong, ok := matched.(common.MapType)
+-						if ok {
++					kuWoSong := matched
++					{
++						{
+ 							musicRid, ok := kuWoSong["MUSICRID"].(string)
+ 							if ok {
+ 								rids := strings.Split(musicRid, "_")
+@@ -91,7 +103,22 @@
  								}
  								songResult.Name = songName
  								songResult.Artist = singerName
-+								// MINFO 里带着这首在各档位是否有资源，以前丢掉了。
-+								// 酷我 mobi.s 拿不到 flac 时只会回 128k 的 M500 链接，
-+								// 客户端默认请求 flac，结果永远停在 128k（见 kuwoBestFormat）。
++								// MINFO 里带着这首在各档位是否有资源（level:ff/bitrate:2000/format:flac 等），
++								// 以前丢掉了。GetSongUrl 只按 MINFO 要真实存在的最高档位，
++								// 否则 mobi.s 对没有 flac 的歌只会回 128k 的 M500 链接（见 kuwoBestFormat）。
 +								if v, ok := kuWoSong["MINFO"].(string); ok {
 +									NMinfoOf(songResult)["MINFO"] = html.UnescapeString(v)
 +								}
  								songResult.AlbumName = html.UnescapeString(kuWoSong["ALBUM"].(string))
++								// 同一个 rid 会被「歌名」「歌名+歌手」等多路检索重复命中，去重后再计分，
++								// 否则同一条候选会被打分两次、在结果里出现两遍。
++								lock.Lock()
++								if _, dup := seen[rid]; dup {
++									lock.Unlock()
++									continue
++								}
++								seen[rid] = struct{}{}
++								lock.Unlock()
  								songResult.Artist = strings.ReplaceAll(singerName, " ", "")
  								songResult.MatchScore, ok = base.CalScore(song, songName, singerName, index, maxIndex)
-@@ -122,20 +127,10 @@
+ 								if !ok {
+@@ -122,20 +149,10 @@
  					retry := true
  					for retry {
  						retry = false
@@ -232,7 +498,7 @@
  
  						clientRequest := network.ClientRequest{
  							Method:               http.MethodGet,
-@@ -180,6 +175,10 @@
+@@ -180,6 +197,10 @@
  func (m *KuWo) ParseSong(searchSong common.SearchSong) *common.Song {
  	song := &common.Song{}
  	songs := m.SearchSong(searchSong)
@@ -243,7 +509,7 @@
  	if len(songs) > 0 {
  		song = m.GetSongUrl(common.SearchMusic{Quality: searchSong.Quality}, songs[0])
  	}
-@@ -208,3 +207,65 @@
+@@ -208,3 +229,65 @@
  	}
  	return token
  }
@@ -309,6 +575,99 @@
 +		return "mp3", ""
 +	}
 +}
+diff -ruN a/provider/kuwo/pcparse.go b/provider/kuwo/pcparse.go
+--- a/provider/kuwo/pcparse.go
++++ b/provider/kuwo/pcparse.go
+@@ -0,0 +1,88 @@
++package kuwo
++
++import (
++	"html"
++	"log"
++	"net/http"
++	"regexp"
++	"strings"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
++	"github.com/cnsilvan/UnblockNeteaseMusic/network"
++)
++
++// kuwoMaxScan 是每条搜索结果里最多看多少条。上游是 min(len/2+1,5)，
++// 在「歌名 + 歌手」这种组合检索下酷我经常把伴奏/DJ/合唱顶在前面，
++// 原唱排到第 6 条以后就被截掉了（实测「成都 赵雷」原唱在第 2 条，
++// 而同名前 5 条全是各种改版）。
++const kuwoMaxScan = 8
++
++// 酷我 PC 搜索接口返回的是单引号「伪 JSON」：
++//
++//	{'ARTISTPIC':'','HIT':'3860','abslist':[{'AARTIST':'Jay&nbsp;Chou', ...}, ...
++//
++// 双引号版（rformat=json + mobi=1）是合法 JSON 但结果被裁到 7~20 条，
++// 所以这里手解 PC 版。字段值里不含单引号，按 'KEY':'VALUE' 取即可。
++var (
++	kuwoItemSep = regexp.MustCompile(`\{'AARTIST'`)
++	kuwoField   = regexp.MustCompile(`'([A-Z0-9_]+)':'([^']*)'`)
++)
++
++// ParsePcAbsList 把 PC 接口的伪 JSON 解成与 mobi 接口同构的 common.MapType 列表，
++// 这样下游取字段的代码不用改：MUSICRID='MUSIC_<rid>'、ARTIST/SONGNAME 仍是 HTML 实体。
++func ParsePcAbsList(body string) []common.MapType {
++	parts := kuwoItemSep.Split(body, -1)
++	list := make([]common.MapType, 0, len(parts))
++	for _, part := range parts[1:] {
++		item := make(common.MapType, 8)
++		found := false
++		for _, m := range kuwoField.FindAllStringSubmatch(part, -1) {
++			key := m[1]
++			if key == "abslist" || key == "searchgroup" {
++				break
++			}
++			item[key] = html.UnescapeString(m[2])
++			if key == "MUSICRID" {
++				found = true
++			}
++		}
++		if found {
++			list = append(list, item)
++		}
++	}
++	return list
++}
++
++// FetchPcAbsList 拉取一次搜索结果并解析。network 层带 Referer 的默认头不值得，
++// 这个接口裸请求即可；出错时返回 err 让调用方打日志跳过。
++func FetchPcAbsList(searchUrl string, header http.Header) ([]common.MapType, error) {
++	resp, err := network.Request(&network.ClientRequest{
++		Method:    http.MethodGet,
++		RemoteUrl: searchUrl,
++		Header:    header,
++		Proxy:     true,
++	})
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		log.Println("kuwo search status:", resp.StatusCode)
++		return nil, err
++	}
++	body, err := network.GetResponseBody(resp, false)
++	if err != nil {
++		return nil, err
++	}
++	return ParsePcAbsList(string(body)), nil
++}
++
++// CopyrightFree 判断这首歌在酷我上是不是「无版权」条目。
++// PC 接口的 COPYRIGHT 字段：0 表示有版权/可播放，非 0 一般是无版权占位。
++// 目前只在日志里用，便于排障时一眼看出为什么选/没选某条。
++func CopyrightFree(item common.MapType) bool {
++	if v, ok := item["COPYRIGHT"].(string); ok {
++		return strings.TrimSpace(v) == "0"
++	}
++	return false
++}
+diff -ruN a/provider/provider.go b/provider/provider.go
 --- a/provider/provider.go
 +++ b/provider/provider.go
 @@ -7,6 +7,7 @@
@@ -375,6 +734,7 @@
  		}
  	}
  }
+diff -ruN a/proxy/proxy.go b/proxy/proxy.go
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
 @@ -9,6 +9,7 @@
