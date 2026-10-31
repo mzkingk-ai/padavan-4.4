@@ -104,12 +104,28 @@ typedef u_int8_t u8;
 #define EVM_RESTART_WIREGUARD	(1ULL << 62)
 #define EVM_RESTART_SQM		    (1ULL << 63)
 #define EVM_RESTART_WYYBIN		(1ULL << 54)
-/* 未绑定到任何 events_desc 条目，只借它的 EVM_BLOCK_UNSAFE 位来做登录校验 */
-#define EVM_WYYBIN_CERT_ADMIN	(1ULL << 55)
+/*
+ * 这两个位号原先写的是 1ULL << 64 / 1ULL << 65，但 event_mask 的类型是
+ * u64，左移位数 >= 64 在 C 里是未定义行为（gcc 直接报 -Wshift-count-overflow），
+ * 在 gcc 上的实际结果是恒为 0：
+ *   - EVM_BLOCK_UNSAFE 恒为 0 → web_ex.c 里所有
+ *     `if (!get_login_safe() && (v->event_mask & EVM_BLOCK_UNSAFE))`
+ *     判断永远不成立，http_username / http_passwd / web 启动脚本 /
+ *     证书文件这些本该「未登录不许改」的变量全部形同虚设；
+ *   - EVM_RESTART_REBOOT 恒为 0 → EVM_RESTART_REBOOT 的位运算全部失效，
+ *     改 sw_mode / usb3_disable 后 ej_notify_services() 里的自动重启分支
+ *     永远不触发（本意是「应用后自动重启」）。
+ *
+ * 位 0-9 空闲，EVM_RESTART_* 占用 10-63 中的大部分（含上位项目 fork 新增的
+ * 54、57-63 段），1ULL << 55 曾被本项目定义成 EVM_WYYBIN_CERT_ADMIN，但它
+ * 从未被任何变量或 events_desc 引用（证书登录校验现在直接在 variables.c
+ * 里给 wyybin_cert 加 EVM_BLOCK_UNSAFE），已随本次修正删除。
+ * 位号只要互不冲突即可，取值本身没有语义，改动只影响 event_mask 的位运算，
+ * 不需要改任何调用方。
+ */
+#define EVM_RESTART_REBOOT		(1ULL << 56)
 
-#define EVM_RESTART_REBOOT		(1ULL << 64)
-
-#define EVM_BLOCK_UNSAFE		(1ULL << 65) /* special case */
+#define EVM_BLOCK_UNSAFE		(1ULL << 16) /* special case */
 
 
 #define EVT_RESTART_FIREWALL	1
