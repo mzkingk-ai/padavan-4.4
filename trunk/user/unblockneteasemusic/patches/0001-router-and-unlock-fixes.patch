@@ -1,6 +1,6 @@
 diff -ruN a/app.go b/app.go
---- a/app.go
-+++ b/app.go
+--- a/app.go	2024-07-31 12:39:07.000000000 +0800
++++ b/app.go	2026-10-31 08:44:19.087881127 +0800
 @@ -67,8 +67,11 @@
  				exit <- true
  			}()
@@ -15,8 +15,8 @@ diff -ruN a/app.go b/app.go
  			log.Println("exiting UnblockNeteaseMusic")
  		}
 diff -ruN a/common/common.go b/common/common.go
---- a/common/common.go
-+++ b/common/common.go
+--- a/common/common.go	2024-07-31 12:39:07.000000000 +0800
++++ b/common/common.go	2026-10-31 08:44:19.088024806 +0800
 @@ -87,6 +87,12 @@
  	}
  }
@@ -31,8 +31,8 @@ diff -ruN a/common/common.go b/common/common.go
  	ProxyIp     = "127.0.0.1"
  	ProxyDomain = map[string]string{
 diff -ruN a/config/config.go b/config/config.go
---- a/config/config.go
-+++ b/config/config.go
+--- a/config/config.go	2024-07-31 12:39:07.000000000 +0800
++++ b/config/config.go	2026-10-31 08:44:19.088144031 +0800
 @@ -8,7 +8,7 @@
  	"os"
  	"path/filepath"
@@ -75,11 +75,212 @@ diff -ruN a/config/config.go b/config/config.go
  	if err != nil {
  		log.Println(err)
 diff -ruN a/host/host.go b/host/host.go
---- a/host/host.go
-+++ b/host/host.go
-@@ -199,7 +199,17 @@
+--- a/host/host.go	2024-07-31 12:39:07.000000000 +0800
++++ b/host/host.go	2026-10-31 20:52:30.599306482 +0800
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"bufio"
++	"encoding/binary"
+ 	"fmt"
+ 	"github.com/cnsilvan/UnblockNeteaseMusic/common"
+ 	"github.com/cnsilvan/UnblockNeteaseMusic/config"
+@@ -12,6 +13,7 @@
+ 	"path/filepath"
+ 	"runtime"
+ 	"strings"
++	"time"
+ )
+ 
+ func getWinSystemDir() string {
+@@ -186,22 +188,195 @@
+ 
+ 	return "", nil
+ }
++
++// publicDnsServer 是查询「网易真实地址」时用的外部 DNS。
++// 不能用系统 DNS：转发模式下系统 DNS 就是本机 dnsmasq，它会把 music.163.com
++// 直接答回 192.168.3.1，于是 HostDomain 被写成局域网地址，之后自己去请求
++// 网易 API 就变成请求自己，服务端授权信息永远拿不到，任何歌都解锁不了。
++var publicDnsServer = "223.5.5.5:53"
++
++// resolveUpstreamIps 用外部 DNS 解析网易域名，结果写回 common.HostDomain。
++//
++// resolveIps() 走的是系统解析器（net.ResolveIPAddr），在 Padavan 上等价于
++// 问本机 dnsmasq。转发模式下 dnsmasq 里正好有我们写进去的
++// address=/music.163.com/<本机 IP>，于是拿到的是自己的地址。
++// 这里必须绕开系统解析器，直接问公共 DNS。
++//
++// 解析失败时不改 HostDomain：内置 IP（59.111.181.35）仍然可用，
++// 而写进一个局域网地址会让整条解锁链路彻底失效。
++func resolveUpstreamIps() {
++	for domain := range common.HostDomain {
++		ip, err := queryPublicDns(domain, publicDnsServer)
++		if err != nil || len(ip) == 0 {
++			log.Printf("WARNING: 用 %s 解析 %s 失败(%v)，继续使用当前地址 %s",
++				publicDnsServer, domain, err, common.HostDomain[domain])
++			continue
++		}
++		if !isPublicIpv4(ip) {
++			log.Printf("WARNING: %s 解析到非公网地址 %s（疑似被劫持），继续使用 %s",
++				domain, ip, common.HostDomain[domain])
++			continue
++		}
++		if common.HostDomain[domain] != ip {
++			log.Printf("HostDomain 更新：%s %s -> %s", domain, common.HostDomain[domain], ip)
++		}
++		common.HostDomain[domain] = ip
++	}
++}
++
++// isPublicIpv4 判断是否为可路由的公网 IPv4。
++// 用来挡掉 127.0.0.1 / 192.168.x.x / 10.x.x.x 这类「答回自己」的结果。
++func isPublicIpv4(s string) bool {
++	ip := net.ParseIP(s)
++	if ip == nil || ip.To4() == nil {
++		return false
++	}
++	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
++		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast())
++}
++
++// queryPublicDns 直接向 publicDnsServer 发一次 A 记录查询。
++func queryPublicDns(domain, server string) (string, error) {
++	d := net.Dialer{Timeout: 3 * time.Second}
++	conn, err := d.Dial("udp", server)
++	if err != nil {
++		return "", err
++	}
++	defer conn.Close()
++	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
++	id := uint16(time.Now().UnixNano() & 0xffff)
++	msg := buildDnsQuery(id, domain)
++	if _, err = conn.Write(msg); err != nil {
++		return "", err
++	}
++	buf := make([]byte, 512)
++	n, err := conn.Read(buf)
++	if err != nil {
++		return "", err
++	}
++	return parseDnsAnswer(buf[:n], id)
++}
++
++// buildDnsQuery 拼一个标准的 A 记录查询报文（RD=1，单问题，class IN）。
++func buildDnsQuery(id uint16, domain string) []byte {
++	buf := make([]byte, 0, 512)
++	buf = append(buf, byte(id>>8), byte(id))
++	buf = append(buf, 0x01, 0x00) // flags: RD
++	buf = append(buf, 0, 1)       // QDCOUNT
++	buf = append(buf, 0, 0)       // ANCOUNT
++	buf = append(buf, 0, 0)       // NSCOUNT
++	buf = append(buf, 0, 0)       // ARCOUNT
++	for _, label := range strings.Split(domain, ".") {
++		if len(label) == 0 || len(label) > 63 {
++			continue
++		}
++		buf = append(buf, byte(len(label)))
++		buf = append(buf, label...)
++	}
++	buf = append(buf, 0)    // 名字结束
++	buf = append(buf, 0, 1) // QTYPE=A
++	buf = append(buf, 0, 1) // QCLASS=IN
++	return buf
++}
++
++// skipDnsName 跳过（可能的压缩指针 +）标签序列，返回下一个字段的偏移。
++func skipDnsName(msg []byte, off int) (int, bool) {
++	for off < len(msg) {
++		l := int(msg[off])
++		if l == 0 {
++			return off + 1, true
++		}
++		if l&0xc0 == 0xc0 { // 压缩指针，占 2 字节
++			if off+2 > len(msg) {
++				return 0, false
++			}
++			return off + 2, true
++		}
++		off += 1 + l
++	}
++	return 0, false
++}
++
++// parseDnsAnswer 从应答里取第一条 A 记录；没有 A 记录视为失败。
++func parseDnsAnswer(msg []byte, id uint16) (string, error) {
++	if len(msg) < 12 {
++		return "", fmt.Errorf("dns 应答过短")
++	}
++	if binary.BigEndian.Uint16(msg[0:2]) != id {
++		return "", fmt.Errorf("dns 事务号不匹配")
++	}
++	if rcode := msg[3] & 0x0f; rcode != 0 {
++		return "", fmt.Errorf("dns rcode=%d", rcode)
++	}
++	qd := int(binary.BigEndian.Uint16(msg[4:6]))
++	an := int(binary.BigEndian.Uint16(msg[6:8]))
++	off := 12
++	for i := 0; i < qd; i++ {
++		var ok bool
++		if off, ok = skipDnsName(msg, off); !ok || off+4 > len(msg) {
++			return "", fmt.Errorf("dns 问题段损坏")
++		}
++		off += 4
++	}
++	for i := 0; i < an; i++ {
++		var ok bool
++		if off, ok = skipDnsName(msg, off); !ok || off+10 > len(msg) {
++			return "", fmt.Errorf("dns 应答段损坏")
++		}
++		rtype := binary.BigEndian.Uint16(msg[off : off+2])
++		rdlen := int(binary.BigEndian.Uint16(msg[off+8 : off+10]))
++		off += 10
++		if off+rdlen > len(msg) {
++			return "", fmt.Errorf("dns 应答段越界")
++		}
++		if rtype == 1 && rdlen == 4 { // A
++			return net.IP(msg[off : off+4]).String(), nil
++		}
++		off += rdlen
++	}
++	return "", fmt.Errorf("dns 无 A 记录")
++}
++
+ func resolveIps() error {
+ 	for domain, _ := range common.HostDomain {
+-		rAddr, err := net.ResolveIPAddr("ip", domain)
+-		if err != nil {
+-			log.Printf("Fail to resolve %s, %s\n", domain, err)
+-			return err
+-		}
+-		if len(rAddr.IP) == 0 {
+-			log.Printf("Fail to resolve %s,IP nil\n", domain)
+-			return fmt.Errorf("Fail to resolve  %s,Ip length==0 \n", domain)
++		// 优先走公共 DNS。转发模式（mode=1）下系统解析器就是本机 dnsmasq，
++		// 里面挂着 address=/music.163.com/<本机IP>，用它必然解析到自己，
++		// 之后 HostDomain 被写成局域网地址，去请求网易 API 就等于请求自己，
++		// 服务端授权信息永远拿不到，任何歌都解锁不了。
++		ip := ""
++		if pub, perr := queryPublicDns(domain, publicDnsServer); perr == nil && isPublicIpv4(pub) {
++			ip = pub
++		} else {
++			if perr != nil {
++				log.Printf("WARNING: 公共 DNS 解析 %s 失败(%v)，回退系统解析器", domain, perr)
++			} else {
++				log.Printf("WARNING: 公共 DNS 把 %s 解析到非公网地址 %s，回退系统解析器", domain, pub)
++			}
++			rAddr, err := net.ResolveIPAddr("ip", domain)
++			if err != nil {
++				log.Printf("Fail to resolve %s, %s\n", domain, err)
++				return err
++			}
++			if len(rAddr.IP) == 0 {
++				log.Printf("Fail to resolve %s,IP nil\n", domain)
++				return fmt.Errorf("Fail to resolve  %s,Ip length==0 \n", domain)
++			}
++			ip = rAddr.IP.String()
  		}
- 		ip := rAddr.IP.String()
+-		ip := rAddr.IP.String()
  		if ip == "127.0.0.1" {
 -			panic(fmt.Sprintf("%v ip:%v is error", domain, ip))
 +			// 上游在这里 panic，而且发生在主 goroutine 里，会直接把进程带走。
@@ -94,11 +295,32 @@ diff -ruN a/host/host.go b/host/host.go
 +			}
 +			return fmt.Errorf("%v ip:%v is error", domain, ip)
  		}
- 		common.HostDomain[domain] = rAddr.IP.String()
+-		common.HostDomain[domain] = rAddr.IP.String()
++		common.HostDomain[domain] = ip
  
+ 	}
+ 	return nil
+@@ -260,12 +435,12 @@
+ 		}
+ 		return err
+ 	} else {
+-		err := resolveIps()
+-		if err != nil {
+-			return err
+-		}
++		// 纯代理模式下也要拿到「网易真实地址」，否则 serveProxy 会把请求
++		// 发回 HostDomain 里那个值。转发模式（mode=1）下系统 DNS 已经
++		// 被本机劫持，resolveIps() 必然解析到自己，这里统一走外部 DNS。
++		resolveUpstreamIps()
+ 		log.Println("HostDomain:", common.HostDomain)
+-		return err
++		return nil
+ 	}
+ 
+ }
 diff -ruN a/processor/processor.go b/processor/processor.go
---- a/processor/processor.go
-+++ b/processor/processor.go
+--- a/processor/processor.go	2024-07-31 12:39:07.000000000 +0800
++++ b/processor/processor.go	2026-10-31 08:44:19.088371067 +0800
 @@ -121,12 +121,22 @@
  			}
  		} else if len(requestBody) > 7 {
@@ -129,8 +351,8 @@ diff -ruN a/processor/processor.go b/processor/processor.go
  		netease.Path = strings.ReplaceAll(netease.Path, "https://music.163.com", "")
  		netease.Path = strings.ReplaceAll(netease.Path, "http://music.163.com", "")
 diff -ruN a/provider/base/base.go b/provider/base/base.go
---- a/provider/base/base.go
-+++ b/provider/base/base.go
+--- a/provider/base/base.go	2024-07-31 12:39:07.000000000 +0800
++++ b/provider/base/base.go	2026-10-31 08:44:19.088507842 +0800
 @@ -2,9 +2,11 @@
  
  import (
@@ -187,8 +409,8 @@ diff -ruN a/provider/base/base.go b/provider/base/base.go
 +	return kept
 +}
 diff -ruN a/provider/base/score_filter_test.go b/provider/base/score_filter_test.go
---- a/provider/base/score_filter_test.go
-+++ b/provider/base/score_filter_test.go
+--- a/provider/base/score_filter_test.go	1970-01-01 08:00:00.000000000 +0800
++++ b/provider/base/score_filter_test.go	2026-10-31 08:44:19.088574220 +0800
 @@ -0,0 +1,33 @@
 +package base
 +
@@ -224,8 +446,8 @@ diff -ruN a/provider/base/score_filter_test.go b/provider/base/score_filter_test
 +	}
 +}
 diff -ruN a/provider/base/score_test.go b/provider/base/score_test.go
---- a/provider/base/score_test.go
-+++ b/provider/base/score_test.go
+--- a/provider/base/score_test.go	1970-01-01 08:00:00.000000000 +0800
++++ b/provider/base/score_test.go	2026-10-31 08:44:19.088629351 +0800
 @@ -0,0 +1,54 @@
 +package base
 +
@@ -282,8 +504,8 @@ diff -ruN a/provider/base/score_test.go b/provider/base/score_test.go
 +	}
 +}
 diff -ruN a/provider/kuwo/kuwo_endtoend_test.go b/provider/kuwo/kuwo_endtoend_test.go
---- a/provider/kuwo/kuwo_endtoend_test.go
-+++ b/provider/kuwo/kuwo_endtoend_test.go
+--- a/provider/kuwo/kuwo_endtoend_test.go	1970-01-01 08:00:00.000000000 +0800
++++ b/provider/kuwo/kuwo_endtoend_test.go	2026-10-31 08:44:19.088717464 +0800
 @@ -0,0 +1,88 @@
 +package kuwo
 +
@@ -374,8 +596,8 @@ diff -ruN a/provider/kuwo/kuwo_endtoend_test.go b/provider/kuwo/kuwo_endtoend_te
 +	}
 +}
 diff -ruN a/provider/kuwo/kuwo.go b/provider/kuwo/kuwo.go
---- a/provider/kuwo/kuwo.go
-+++ b/provider/kuwo/kuwo.go
+--- a/provider/kuwo/kuwo.go	2024-07-31 12:39:07.000000000 +0800
++++ b/provider/kuwo/kuwo.go	2026-10-31 08:44:19.088803573 +0800
 @@ -21,9 +21,17 @@
  
  type KuWo struct{}
@@ -576,8 +798,8 @@ diff -ruN a/provider/kuwo/kuwo.go b/provider/kuwo/kuwo.go
 +	}
 +}
 diff -ruN a/provider/kuwo/pcparse.go b/provider/kuwo/pcparse.go
---- a/provider/kuwo/pcparse.go
-+++ b/provider/kuwo/pcparse.go
+--- a/provider/kuwo/pcparse.go	1970-01-01 08:00:00.000000000 +0800
++++ b/provider/kuwo/pcparse.go	2026-10-31 08:44:19.088901709 +0800
 @@ -0,0 +1,88 @@
 +package kuwo
 +
@@ -668,8 +890,8 @@ diff -ruN a/provider/kuwo/pcparse.go b/provider/kuwo/pcparse.go
 +	return false
 +}
 diff -ruN a/provider/provider.go b/provider/provider.go
---- a/provider/provider.go
-+++ b/provider/provider.go
+--- a/provider/provider.go	2024-07-31 12:39:07.000000000 +0800
++++ b/provider/provider.go	2026-10-31 08:44:19.089025515 +0800
 @@ -7,6 +7,7 @@
  	"github.com/cnsilvan/UnblockNeteaseMusic/cache"
  	"github.com/cnsilvan/UnblockNeteaseMusic/common"
@@ -735,8 +957,8 @@ diff -ruN a/provider/provider.go b/provider/provider.go
  	}
  }
 diff -ruN a/proxy/proxy.go b/proxy/proxy.go
---- a/proxy/proxy.go
-+++ b/proxy/proxy.go
+--- a/proxy/proxy.go	2024-07-31 12:39:07.000000000 +0800
++++ b/proxy/proxy.go	2026-10-31 20:26:44.171021905 +0800
 @@ -9,6 +9,7 @@
  	"net"
  	"net/http"
@@ -1194,7 +1416,7 @@ diff -ruN a/proxy/proxy.go b/proxy/proxy.go
  	}
  }
  func proxyConnectLocalhost(rw http.ResponseWriter, req *http.Request) {
-@@ -332,6 +372,112 @@
+@@ -332,34 +372,152 @@
  	defer client.Close()
  	defer server.Close()
  }
@@ -1307,8 +1529,17 @@ diff -ruN a/proxy/proxy.go b/proxy/proxy.go
  func startTlsServer(addr, certFile, keyFile string, handler http.Handler) {
  	log.Printf("starting TLS Server  %s\n", addr)
  	s := &http.Server{
-@@ -341,9 +487,17 @@
- 		WriteTimeout:   10 * time.Second,
+-		Addr:           addr,
+-		Handler:        handler,
+-		ReadTimeout:    10 * time.Second,
+-		WriteTimeout:   10 * time.Second,
++		Addr:        addr,
++		Handler:     handler,
++		ReadTimeout: 10 * time.Second,
++		// 不能设 WriteTimeout：TLS 端口是给播放器串流用的，一个完整音频
++		// 走完响应头之后还要持续几十秒到几分钟，10 秒硬超时会把长曲直接
++		// 掐断（现象是「播一会儿就断」）。连接空闲由 ReadTimeout 兜住。
++		WriteTimeout:   0,
  		MaxHeaderBytes: 1 << 20,
  	}
 -	err := s.ListenAndServeTLS(certFile, keyFile)
@@ -1328,8 +1559,19 @@ diff -ruN a/proxy/proxy.go b/proxy/proxy.go
  	}
  }
  func startServer(addr string, handler http.Handler) {
-@@ -355,11 +509,9 @@
- 		WriteTimeout:   10 * time.Second,
+ 	log.Printf("starting Server  %s\n", addr)
+ 	s := &http.Server{
+-		Addr:           addr,
+-		Handler:        handler,
+-		ReadTimeout:    10 * time.Second,
+-		WriteTimeout:   10 * time.Second,
++		Addr:        addr,
++		Handler:     handler,
++		ReadTimeout: 10 * time.Second,
++		// 不能设 WriteTimeout：TLS 端口是给播放器串流用的，一个完整音频
++		// 走完响应头之后还要持续几十秒到几分钟，10 秒硬超时会把长曲直接
++		// 掐断（现象是「播一会儿就断」）。连接空闲由 ReadTimeout 兜住。
++		WriteTimeout:   0,
  		MaxHeaderBytes: 1 << 20,
  	}
 -	err := s.ListenAndServe()
