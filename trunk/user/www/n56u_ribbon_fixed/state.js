@@ -421,21 +421,6 @@ if (found_app_smartdns()||found_app_adguardhome()){
 if (found_app_aliddns()||found_app_zerotier()||found_app_ddnsto()||found_app_wireguard()||found_app_wyybin()){
 	tabtitle[16] = new Array("", "<#menu5_30#>");
 }
-// 第十六组（tablink[16]）里只显示一个子页，由上面的 else-if 链决定是哪一个。
-// 因此标题也要跟着换：以前固定写“穿透服务”，选了网易云解锁后左侧菜单会显示
-// “穿透服务”，和实际打开的页面完全对不上。tabtitle[16] 实际没被 show_menu 用到
-// （它读的是 tabtitle[L2-1]，L2=16 时读的是 tabtitle[16]），所以两处都要改。
-if (found_app_aliddns()){
-	tabtitle[16] = new Array("", "<#menu5_23_1#>");
-}else if (found_app_zerotier()){
-	tabtitle[16] = new Array("", "<#menu5_32_1#>");
-}else if (found_app_ddnsto()){
-	tabtitle[16] = new Array("", "<#menu5_34_1#>");
-}else if (found_app_wireguard()){
-	tabtitle[16] = new Array("", "<#menu5_35_1#>");
-}else if (found_app_wyybin()){
-	tabtitle[16] = new Array("", "<#menu5_31_1#>");
-}
 if (found_app_aldriver()){
 	tabtitle[17] = new Array("", "<#menu5_36#>");
 }
@@ -544,18 +529,7 @@ if (found_app_smartdns()||found_app_adguardhome()){
 } else menuL2_title.push("");
 
 if (found_app_aliddns()||found_app_zerotier()||found_app_ddnsto()||found_app_wireguard()||found_app_wyybin()){
-	// 左侧二级菜单标题，规则与上面 tabtitle[16] 一致：跟着实际存在的那个子页走。
-	// 否则网易云解锁的用户会看到“穿透服务”下面只有“网易云音乐解锁”一项。
-	if (found_app_aliddns())
-		menuL2_title.push("<#menu5_23_1#>");
-	else if (found_app_zerotier())
-		menuL2_title.push("<#menu5_32_1#>");
-	else if (found_app_ddnsto())
-		menuL2_title.push("<#menu5_34_1#>");
-	else if (found_app_wireguard())
-		menuL2_title.push("<#menu5_35_1#>");
-	else
-		menuL2_title.push("<#menu5_31_1#>");
+	menuL2_title.push("<#menu5_30#>");
 } else menuL2_title.push("");
 
 if (found_app_aldriver()){

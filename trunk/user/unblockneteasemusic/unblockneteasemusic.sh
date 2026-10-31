@@ -17,9 +17,6 @@ UNM_CA="$UNM_DIR/ca.crt"
 UNM_CAKEY="$UNM_DIR/ca.key"
 UNM_CSR="$UNM_DIR/server.csr"
 UNM_EXT="$UNM_DIR/ext.cnf"
-# QQ 音乐 cookie：上游 -qc 只吃 Netscape cookies.txt 格式，文件不存在时 QQ 源
-# 退化为只试 M800（320k）、VIP 曲目一律拿不到。放在 storage 里刷机不丢。
-UNM_QQ_COOKIE="$UNM_DIR/qq.cookie"
 
 # 需要被转发/劫持的域名（对应 host/host.go 中的 HostDomain）
 UNM_DOMAINS="music.163.com interface.music.163.com interface3.music.163.com"
@@ -135,65 +132,6 @@ unm_check_cert() {
 	fi
 	logger -t "网易云解锁" "警告：$UNM_LAST_ERR，将以无证书模式启动（仅 HTTP 可用）"
 	return 1
-}
-
-# ---------------------------------------------------------------------------
-# QQ 音乐 cookie
-#   上游 -qc 只认 Netscape cookies.txt，解析器要求每行恰好 6 个空白分隔字段：
-#     domain<TAB>flag<TAB>path<TAB>secure(TRUE/FALSE)<TAB>expires(秒)<TAB>name<TAB>value
-#   （"#HttpOnly_" 前缀表示 HttpOnly，其它以 # 开头的行整体视为注释）
-#   常见坑：
-#     - 写成 "name=value; name2=value2" 这种 Request Header 格式 → 一行会被解析成
-#       一个名为 name=value; 的假 cookie，登录态等于没有；
-#     - expires 写成 0 或非数字 → ParseLine 直接返回错误、该行被丢弃；
-#     - 用 {} 或占位符分批粘贴 → 同样静默丢行。
-#   所以这里不盲目信任，先把坏行挑出来记日志，避免「文件在、却没登录上」的无声失败。
-# ---------------------------------------------------------------------------
-UNM_QQ_COOKIE_ERR=""
-
-unm_check_qq_cookie() {
-	local ok bad line n=0
-
-	UNM_QQ_COOKIE_ERR=""
-	[ -s "$UNM_QQ_COOKIE" ] || return 1
-
-	# 逐行按上游同样的规则统计：可用的行 vs 被丢弃的行
-	ok=0
-	bad=0
-	while IFS= read -r line || [ -n "$line" ]; do
-		# 去掉行尾 CR（Windows 记事本保存的文件）
-		line=$(echo "$line" | tr -d '\r')
-		[ -z "$line" ] && continue
-		case "$line" in
-			'#'*)
-				case "$line" in
-					'#HttpOnly_'*) : ;;
-					*) continue ;;
-				esac
-				;;
-		esac
-		n=$(echo "$line" | awk '{print NF}')
-		if [ "$n" -ge 7 ]; then
-			# 第 5 字段（expires）必须是整数，否则上游 ParseLine 返回错误丢行
-			if echo "$line" | awk '{exit !($5 ~ /^[0-9]+$/)}'; then
-				ok=$((ok + 1))
-			else
-				bad=$((bad + 1))
-			fi
-		else
-			bad=$((bad + 1))
-		fi
-	done <"$UNM_QQ_COOKIE"
-
-	if [ "$ok" -eq 0 ]; then
-		UNM_QQ_COOKIE_ERR="qq.cookie 里没有一条能解析的 cookie（$bad 行格式不对）"
-		return 1
-	fi
-
-	chmod 600 "$UNM_QQ_COOKIE" 2>/dev/null
-	[ "$bad" -gt 0 ] && logger -t "网易云解锁" "qq.cookie 中有 $bad 行格式非法，上游会忽略这些行"
-	logger -t "网易云解锁" "qq.cookie 已加载：$ok 条 cookie"
-	return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -313,16 +251,6 @@ unm_start() {
 		args="$args -insecure"
 	fi
 
-	# QQ 音乐 cookie：只有文件真的存在且能被上游解析时才传，否则别让上游
-	# 拿着半截 cookie 去请求（它会以为已登录，去并发取 M500/M800/F000 三档，
-	# 结果三档全被版权拦掉，比退化模式还差）。
-	# 注意 -qc 的默认值是相对路径 ./qq.cookie，不传就会去找进程 cwd 下的文件。
-	if unm_check_qq_cookie; then
-		args="$args -qc $UNM_QQ_COOKIE"
-	elif [ -n "$UNM_QQ_COOKIE_ERR" ]; then
-		logger -t "网易云解锁" "忽略 $UNM_QQ_COOKIE：$UNM_QQ_COOKIE_ERR"
-	fi
-
 	# 页面上的「匹配阈值」：0 表示不过滤（回到上游行为），留空用默认 0.75
 	ms=$(nvram get wyybin_minscore)
 	[ -z "$ms" ] && ms=0.75
@@ -358,7 +286,7 @@ unm_start() {
 		return 1
 	fi
 
-	logger -t "网易云解锁" "启动成功，HTTP $port / HTTPS $sslport，音源 $source${UNM_QQ_COOKIE_ERR:+（QQ cookie 未生效）}"
+	logger -t "网易云解锁" "启动成功，HTTP $port / HTTPS $sslport，音源 $source"
 
 	# mode=1 为转发模式：把音乐域名指向本机，客户端无需任何设置
 	ip=$(unm_getip)
@@ -388,21 +316,11 @@ status)
 		echo "stopped"
 	fi
 	;;
-qccheck)
-	# 供页面/命令行自检：判断当前 qq.cookie 能否被上游解析
-	if unm_check_qq_cookie; then
-		echo "ok $(grep -cv '^[[:space:]]*$' "$UNM_QQ_COOKIE" 2>/dev/null) lines"
-	elif [ -n "$UNM_QQ_COOKIE_ERR" ]; then
-		echo "bad $UNM_QQ_COOKIE_ERR"
-	else
-		echo "none"
-	fi
-	;;
 cert)
 	unm_check_cert && echo "$UNM_CA"
 	;;
 *)
-	echo "Usage: $0 {start|stop|restart|status|qccheck|cert}"
+	echo "Usage: $0 {start|stop|restart|status|cert}"
 	exit 1
 	;;
 esac

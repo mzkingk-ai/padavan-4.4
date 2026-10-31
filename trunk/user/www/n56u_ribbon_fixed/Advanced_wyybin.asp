@@ -28,10 +28,6 @@ var $j = jQuery.noConflict();
 $j(document).ready(function() {
 
 	init_itoggle('wyybin_enable');
-	$j.post('/_qqcookie.cgi', { op: 'status' }, function(d) {
-		$('wyybin_qqcookie_state').innerHTML =
-			'<span class="label label-' + (d.ok ? 'success' : 'warning') + '">' + d.msg + '</span>';
-	}, 'json');
 
 });
 
@@ -52,7 +48,6 @@ showhide_div('alilink', found_app_aliddns());
 showhide_div('zelink', found_app_zerotier());
 showhide_div('ddlink', found_app_ddnsto());
 showhide_div('wilink', found_app_wireguard());
-qqcookie_toggle();
 }
 
 function fill_status(status_code){
@@ -72,54 +67,6 @@ function applyRule(){
 	document.form.next_page.value = "";
 
 	document.form.submit();
-}
-
-// --- QQ 音乐 cookie 文件 ---------------------------------------------------
-// cookie 走 /_qqcookie.cgi 单独读写，不塞进 nvram：一块 cookie 动辄一两千字节，
-// 而 nvram 分区总共只有 64KB、当前已用 17KB，多存几块就有写满风险（写满后
-// nvram commit 会失败甚至损坏配置）。文件放在 /etc/storage 下，语义也更直白。
-// 注意：本项目没有做 CSRF token，所以这个接口必须再校验一次登录态（见 web_ex.c）。
-function qqcookie_toggle() {
-	var on = $('wyybin_qqcookie').value == '1';
-	if ($('wyybin_qqcookie_text')) $('wyybin_qqcookie_text').disabled = !on;
-}
-
-function qqcookie_msg(ok, text){
-	$('wyybin_qqcookie_msg').innerHTML =
-		'<span class="label label-' + (ok ? 'success' : 'important') + '">' + text + '</span>';
-}
-
-function qqcookie_load(){
-	qqcookie_msg(true, '读取中…');
-	$j.post('/_qqcookie.cgi', { op: 'get' }, function(d) {
-		if (!d.ok) { qqcookie_msg(false, d.msg); return; }
-		$('wyybin_qqcookie_text').value = d.content || '';
-		qqcookie_msg(true, d.msg);
-	}, 'json').fail(function(){ qqcookie_msg(false, '请求失败'); });
-}
-
-function qqcookie_save(){
-	var v = $('wyybin_qqcookie_text').value || '';
-	if (v.replace(/^\s+|\s+$/g, '') == '') { qqcookie_msg(false, '内容为空'); return; }
-	qqcookie_msg(true, '保存中…');
-	$j.post('/_qqcookie.cgi', { op: 'put', content: v }, function(d) {
-		qqcookie_msg(d.ok, d.msg);
-		if (d.ok && d.state) {
-			$('wyybin_qqcookie_state').innerHTML =
-				'<span class="label label-success">' + d.state + '</span>';
-		}
-	}, 'json').fail(function(){ qqcookie_msg(false, '请求失败'); });
-}
-
-function qqcookie_clear(){
-	if (!confirm('确定删除路由器上的 qq.cookie？')) return;
-	qqcookie_msg(true, '删除中…');
-	$j.post('/_qqcookie.cgi', { op: 'del' }, function(d) {
-		qqcookie_msg(d.ok, d.msg);
-		$('wyybin_qqcookie_text').value = '';
-		$('wyybin_qqcookie_state').innerHTML =
-			'<span class="label label-warning">' + (d.state || '未配置') + '</span>';
-	}, 'json').fail(function(){ qqcookie_msg(false, '请求失败'); });
 }
 
 function done_validating(action){
@@ -272,40 +219,6 @@ function done_validating(action){
 												<b>pyncmd</b> 是第三方网易云取址 API：不做搜索匹配，直接用网易 songId 换一条地址，
 												拿到的是网易原文件（320k/mp3），<b>不会把翻唱当原唱</b>。实测周传雄/魏晨等 VIP 歌 10/12 可解。<br>
 												它覆盖不到的歌会自动落到后面的换源音源，所以建议用「pyncmd 优先 + 酷我兜底」。
-											</td>
-										</tr>
-
-										<tr>
-										<th>QQ 音乐 Cookie</th>
-											<td>
-												<select name="wyybin_qqcookie" id="wyybin_qqcookie" class="input" style="width: 200px" onchange="qqcookie_toggle();">
-													<option value="0" <% nvram_match_x("", "wyybin_qqcookie", "0", "selected"); %>>不启用</option>
-													<option value="1" <% nvram_match_x("", "wyybin_qqcookie", "1", "selected"); %>>启用</option>
-												</select>
-												<span id="wyybin_qqcookie_state" style="margin-left: 10px;"></span>
-												<br>开启后启动脚本会给解锁进程带上 <b>-qc</b>，用下面文本框里的 cookie 去请求 QQ 音乐。<br>
-												<b>不启用时</b> QQ 源只会试 M800（320k）一个档位，VIP 曲目一律取不到地址；
-												<b>启用且 cookie 有效时</b>会并发试 M500/M800/F000 三档，并带上你的登录态。<br>
-												文件不存在、或没有任何一行能解析时，脚本会忽略它并在日志里说明原因——
-												<b>不会</b>拿着半截 cookie 去请求（那样反而比不启用更差）。
-											</td>
-										</tr>
-
-										<tr>
-										<th>Cookie 内容</th>
-											<td>
-												<textarea id="wyybin_qqcookie_text" class="input" rows="7" spellcheck="false"
-													style="width: 95%; font-family: Consolas, Menlo, monospace; font-size: 12px;"
-													placeholder="每行一条，7 个字段用 TAB 分隔，例如：&#10;.y.qq.com&#9;TRUE&#9;/&#9;FALSE&#9;1799999999&#9;qqmusic_key&#9;Q_H_L_xxxx"></textarea>
-												<br>
-												<input class="btn btn-primary" style="width: 130px" type="button" value="载入当前文件" onclick="qqcookie_load()" />
-												<input class="btn btn-primary" style="width: 130px" type="button" value="保存到路由器" onclick="qqcookie_save()" />
-												<input class="btn btn-danger" style="width: 110px" type="button" value="清空并删除" onclick="qqcookie_clear()" />
-												<span id="wyybin_qqcookie_msg" style="margin-left: 10px;"></span>
-												<br>保存位置：<b>/etc/storage/unblockneteasemusic/qq.cookie</b>（刷机不丢，权限 600）。<br>
-												保存后需要点下方「应用本页面设置」重启解锁服务才会生效。<br>
-												<b>注意：</b>cookie 是明文存储在路由器的 flash 上，等于把 QQ 音乐的登录凭证交出去；
-												这里存的是你账号的登录态，请只在自用设备上使用。
 											</td>
 										</tr>
 
