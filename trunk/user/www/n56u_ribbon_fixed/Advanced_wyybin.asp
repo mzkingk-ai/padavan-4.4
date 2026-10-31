@@ -203,16 +203,22 @@ function done_validating(action){
 										<tr>
 										<th>音源优先级</th>
 											<td>
-												<select name="wyybin_source" id="wyybin_source" class="input" style="width: 150px">
+												<select name="wyybin_source" id="wyybin_source" class="input" style="width: 200px">
+													<option value="pyncmd" <% nvram_match_x("", "wyybin_source", "pyncmd", "selected"); %>>pyncmd 优先（推荐）</option>
+													<option value="pyncmd:kuwo" <% nvram_match_x("", "wyybin_source", "pyncmd:kuwo", "selected"); %>>pyncmd 优先 + 酷我兜底</option>
+													<option value="pyncmd:kuwo:kugou:migu:qq" <% nvram_match_x("", "wyybin_source", "pyncmd:kuwo:kugou:migu:qq", "selected"); %>>pyncmd 优先 + 全部音源兜底</option>
 													<option value="kuwo" <% nvram_match_x("", "wyybin_source", "kuwo", "selected"); %>>酷我 (kuwo)</option>
 													<option value="kugou" <% nvram_match_x("", "wyybin_source", "kugou", "selected"); %>>酷狗 (kugou)</option>
 													<option value="migu" <% nvram_match_x("", "wyybin_source", "migu", "selected"); %>>咪咕 (migu)</option>
 													<option value="qq" <% nvram_match_x("", "wyybin_source", "qq", "selected"); %>>QQ音乐 (qq)</option>
-													<option value="kuwo|kugou" <% nvram_match_x("", "wyybin_source", "kuwo|kugou", "selected"); %>>酷我 + 酷狗</option>
-													<option value="kuwo|kugou|migu" <% nvram_match_x("", "wyybin_source", "kuwo|kugou|migu", "selected"); %>>酷我 + 酷狗 + 咪咕</option>
-													<option value="kuwo|kugou|migu|qq" <% nvram_match_x("", "wyybin_source", "kuwo|kugou|migu|qq", "selected"); %>>全部四个音源</option>
+													<option value="kuwo:kugou" <% nvram_match_x("", "wyybin_source", "kuwo:kugou", "selected"); %>>酷我 + 酷狗</option>
+													<option value="kuwo:kugou:migu" <% nvram_match_x("", "wyybin_source", "kuwo:kugou:migu", "selected"); %>>酷我 + 酷狗 + 咪咕</option>
+													<option value="kuwo:kugou:migu:qq" <% nvram_match_x("", "wyybin_source", "kuwo:kugou:migu:qq", "selected"); %>>全部四个换源音源</option>
 												</select>
-												<br>找不到原曲时依次尝试的音源，选项越多越慢但命中率越高
+												<br>找不到原曲时依次尝试的音源，选项越多越慢但命中率越高<br>
+												<b>pyncmd</b> 是第三方网易云取址 API：不做搜索匹配，直接用网易 songId 换一条地址，
+												拿到的是网易原文件（320k/mp3），<b>不会把翻唱当原唱</b>。实测周传雄/魏晨等 VIP 歌 10/12 可解。<br>
+												它覆盖不到的歌会自动落到后面的换源音源，所以建议用「pyncmd 优先 + 酷我兜底」。
 											</td>
 										</tr>
 

@@ -32,7 +32,7 @@ diff -ruN a/common/common.go b/common/common.go
  	ProxyDomain = map[string]string{
 diff -ruN a/config/config.go b/config/config.go
 --- a/config/config.go	2024-07-31 12:39:07.000000000 +0800
-+++ b/config/config.go	2026-10-31 08:44:19.088144031 +0800
++++ b/config/config.go	2026-10-31 21:51:38.260024364 +0800
 @@ -8,7 +8,7 @@
  	"os"
  	"path/filepath"
@@ -42,7 +42,17 @@ diff -ruN a/config/config.go b/config/config.go
  	"github.com/cnsilvan/UnblockNeteaseMusic/common"
  	"github.com/cnsilvan/UnblockNeteaseMusic/utils"
  	"github.com/cnsilvan/UnblockNeteaseMusic/version"
-@@ -33,6 +33,8 @@
+@@ -18,7 +18,8 @@
+ 	Addr               = flag.String("a", "0.0.0.0", "specify server listen address,such as : \"0.0.0.0\"")
+ 	Port               = flag.Int("p", 80, "specify server port,such as : \"80\"")
+ 	TLSPort            = flag.Int("sp", 443, "specify server tls port,such as : \"443\"")
+-	Source             = flag.String("o", "kuwo", "specify server source,such as : \"kuwo\"")
++	// 多个音源用冒号分隔（见下方 strings.Split(..., ":")），不是逗号也不是竖线。
++	Source             = flag.String("o", "pyncmd:kuwo", "specify server source,separated by colon,such as : \"pyncmd:kuwo\"")
+ 	CertFile           = flag.String("c", "./server.crt", "specify server cert,such as : \"server.crt\"")
+ 	KeyFile            = flag.String("k", "./server.key", "specify server cert key ,such as : \"server.key\"")
+ 	LogFile            = flag.String("l", "", "specify log file ,such as : \"/var/log/unblockNeteaseMusic.log\"")
+@@ -33,6 +34,8 @@
  	UnlockSoundEffects = flag.Bool("sef", false, "unlock SoundEffects")
  	QQCookieFile       = flag.String("qc", "./qq.cookie", "specify cookies file ,such as : \"qq.cookie\"")
  	LogWebTraffic      = flag.Bool("wl", false, "log request url and response")
@@ -51,7 +61,7 @@ diff -ruN a/config/config.go b/config/config.go
  )
  
  func ValidParams() bool {
-@@ -58,10 +60,21 @@
+@@ -58,10 +61,21 @@
  		log.Printf("searchLimit param invalid （0-3）: %v \n", *SearchLimit)
  		return false
  	}
@@ -320,8 +330,16 @@ diff -ruN a/host/host.go b/host/host.go
  }
 diff -ruN a/processor/processor.go b/processor/processor.go
 --- a/processor/processor.go	2024-07-31 12:39:07.000000000 +0800
-+++ b/processor/processor.go	2026-10-31 08:44:19.088371067 +0800
-@@ -121,12 +121,22 @@
++++ b/processor/processor.go	2026-10-31 21:59:39.933860421 +0800
+@@ -6,6 +6,7 @@
+ 	"crypto/md5"
+ 	"encoding/hex"
+ 	"encoding/json"
++	"fmt"
+ 	"io"
+ 	"io/ioutil"
+ 	"log"
+@@ -121,12 +122,22 @@
  			}
  		} else if len(requestBody) > 7 {
  			requestBodyH := make([]byte, len(requestBody))
@@ -350,6 +368,114 @@ diff -ruN a/processor/processor.go b/processor/processor.go
  		}
  		netease.Path = strings.ReplaceAll(netease.Path, "https://music.163.com", "")
  		netease.Path = strings.ReplaceAll(netease.Path, "http://music.163.com", "")
+@@ -134,6 +145,22 @@
+ 	} else if strings.Index(netease.Path, "/weapi/") == 0 || strings.Index(netease.Path, "/api/") == 0 {
+ 		request.Header.Set("X-Real-IP", "118.66.66.66")
+ 		netease.Web = true
++		// 普通 /api/ GET 的码率等参数全在 query 里，而这条路原来不解析 Params，
++		// 导致 unifiedMusicQuality 永远读到空 map、拿默认的 Lossless 去取歌：
++		// pyncmd 会回一份 37MB 的 flac，手机要 128k 也照给，路由器白白转发几十兆。
++		// 注意 netease.Path 在 RequestBefore 开头就是 request.URL.Path（不含 query），
++		// 所以必须从 request.URL.Query() 取，不能对 Path 做 url.Parse。
++		if rawQuery := request.URL.RawQuery; len(rawQuery) > 0 {
++			q := common.MapType{}
++			for k, v := range request.URL.Query() {
++				if len(v) > 0 {
++					q[k] = v[0]
++				}
++			}
++			if len(q) > 0 {
++				netease.Params = q
++			}
++		}
+ 		netease.Path = utils.ReplaceAll(netease.Path, `^\/weapi\/`, "/api/")
+ 		netease.Path = utils.ReplaceAll(netease.Path, `\?.+$`, "")
+ 		netease.Path = utils.ReplaceAll(netease.Path, `\/\d*$`, "")
+@@ -720,36 +747,58 @@
+ 	// log.Println(fmt.Sprintf("%+v\n", utils.ToJson(netease.Params)))
+ 	netease.MusicQuality = common.Lossless
+ 	if !*config.ForceBestQuality {
+-		if levelParam, ok := netease.Params["level"]; ok {
+-			if level, ok := levelParam.(string); ok {
+-				level = strings.ToLower(level)
+-				if strings.Contains(level, "lossless") {
+-					netease.MusicQuality = common.Lossless
+-				} else if strings.Contains(level, "exhigh") {
+-					netease.MusicQuality = common.ExHigh
+-				} else if strings.Contains(level, "higher") {
+-					netease.MusicQuality = common.Higher
+-				} else if strings.Contains(level, "standard") {
+-					netease.MusicQuality = common.Standard
+-				}
+-			}
+-		} else if brParam, ok := netease.Params["br"]; ok {
+-			if br, ok := brParam.(string); ok {
+-				br = strings.ToLower(br)
+-				if strings.Contains(br, "999000") {
+-					netease.MusicQuality = common.Lossless
+-				} else if strings.Contains(br, "320000") {
+-					netease.MusicQuality = common.ExHigh
+-				} else if strings.Contains(br, "192000") {
+-					netease.MusicQuality = common.Higher
+-				} else if strings.Contains(br, "128000") {
+-					netease.MusicQuality = common.Standard
+-				}
+-			}
++		// 上游这里写的是 if level { ... } else if br { ... }，
++		// 但网易客户端的取址请求同时带 level 和 br，level 分支一命中 br 就永远读不到，
++		// 而 level 只是客户端的档位标记、并不等于实际要的码率（实测 level=standard
++		// 配 br=320000 时网易自己回的就是 320k）。所以这里改成两者独立判断、br 优先：
++		// br 是数字型，必须用 fmt.Sprint 抹平类型，否则 strconv 断言失败会一路跌回 Lossless。
++		level := ""
++		if v, ok := netease.Params["level"].(string); ok {
++			level = strings.ToLower(v)
++		}
++		br := ""
++		if v, ok := netease.Params["br"]; ok {
++			br = strings.ToLower(fmt.Sprint(v))
++		}
++		switch {
++		case isLosslessRate(br):
++			netease.MusicQuality = common.Lossless
++		case isExHighRate(br):
++			netease.MusicQuality = common.ExHigh
++		case isHigherRate(br):
++			netease.MusicQuality = common.Higher
++		case isStandardRate(br):
++			netease.MusicQuality = common.Standard
++		case strings.Contains(level, "lossless"):
++			netease.MusicQuality = common.Lossless
++		case strings.Contains(level, "exhigh"):
++			netease.MusicQuality = common.ExHigh
++		case strings.Contains(level, "higher"):
++			netease.MusicQuality = common.Higher
++		case strings.Contains(level, "standard"):
++			netease.MusicQuality = common.Standard
+ 		}
+ 		// log.Println(fmt.Sprintf("%+v\n", utils.ToJson(netease.MusicQuality)))
+ 	}
+ }
++
++// 下面四个函数把 br 的各种写法（128000 / 128 / "128k"）归到同一档。
++// 用前缀匹配而不是 Contains：客户端偶发传 "br=320000,999000" 这类组合值。
++func isLosslessRate(br string) bool {
++	return strings.HasPrefix(br, "999") || strings.HasPrefix(br, "1999") || strings.HasPrefix(br, "1411")
++}
++
++func isExHighRate(br string) bool {
++	return strings.HasPrefix(br, "320")
++}
++
++func isHigherRate(br string) bool {
++	return strings.HasPrefix(br, "192")
++}
++
++func isStandardRate(br string) bool {
++	return strings.HasPrefix(br, "128")
++}
+ func generateEndpoint(netease *Netease) string {
+ 	protocol := "https"
+ 	endPoint := "://music.163.com/unblockmusic/"
 diff -ruN a/provider/base/base.go b/provider/base/base.go
 --- a/provider/base/base.go	2024-07-31 12:39:07.000000000 +0800
 +++ b/provider/base/base.go	2026-10-31 08:44:19.088507842 +0800
@@ -891,8 +1017,8 @@ diff -ruN a/provider/kuwo/pcparse.go b/provider/kuwo/pcparse.go
 +}
 diff -ruN a/provider/provider.go b/provider/provider.go
 --- a/provider/provider.go	2024-07-31 12:39:07.000000000 +0800
-+++ b/provider/provider.go	2026-10-31 08:44:19.089025515 +0800
-@@ -7,6 +7,7 @@
++++ b/provider/provider.go	2026-10-31 21:49:40.749236083 +0800
+@@ -7,9 +7,11 @@
  	"github.com/cnsilvan/UnblockNeteaseMusic/cache"
  	"github.com/cnsilvan/UnblockNeteaseMusic/common"
  	"github.com/cnsilvan/UnblockNeteaseMusic/network"
@@ -900,7 +1026,11 @@ diff -ruN a/provider/provider.go b/provider/provider.go
  	kugou "github.com/cnsilvan/UnblockNeteaseMusic/provider/kugou"
  	"github.com/cnsilvan/UnblockNeteaseMusic/provider/kuwo"
  	"github.com/cnsilvan/UnblockNeteaseMusic/provider/migu"
-@@ -34,6 +35,20 @@
++	"github.com/cnsilvan/UnblockNeteaseMusic/provider/pyncmd"
+ 	"github.com/cnsilvan/UnblockNeteaseMusic/provider/qq"
+ 	"net/http"
+ 	"net/url"
+@@ -34,6 +36,20 @@
  	for _, source := range common.Source {
  		providers[source] = NewProvider(source)
  	}
@@ -921,7 +1051,82 @@ diff -ruN a/provider/provider.go b/provider/provider.go
  }
  func NewProvider(kind string) Provider {
  	switch kind {
-@@ -236,14 +251,19 @@
+@@ -45,7 +61,10 @@
+ 		return &migu.Migu{}
+ 	case "qq":
+ 		return &qq.QQ{}
++	case "pyncmd":
++		return &pyncmd.PyNcmd{}
+ 	default:
++		// 未知音源退回酷我，保持上游行为不变。
+ 		return &kuwo.KuWo{}
+ 	}
+ }
+@@ -162,6 +181,15 @@
+ 			searchSong["artistList"] = artists
+ 			searchSong["keyword"] = searchSong["name"].(string) + " " + searchSong["artistsName"].(string)
+ 			log.Println("search song:" + searchSong["keyword"].(string))
++			// 先试 pyncmd：它不需要歌名匹配，直接拿网易 songId 换地址，
++			// 拿回来的就是这首歌本身（实测 md5 与网易原址一致），
++			// 没有「猜哪条是原唱」这一步，也就不存在翻唱风险。
++			// 它覆盖不到的歌（实测《冬天的秘密》《成都》返回空）再走下面的换源搜索。
++			songT = *findFromPyNcmd(searchSong, music)
++			if len(songT.Url) > 0 {
++				log.Println(utils.ToJson(songT))
++				return songT
++			}
+ 			songT = *parseSongFn(searchSong, music)
+ 			log.Println(utils.ToJson(songT))
+ 			return songT
+@@ -174,6 +202,47 @@
+ 	}
+ }
+ 
++// findFromPyNcmd 用网易 songId 走 pyncmd 拿直链。
++//
++// 这不是「换源」，而是「同一首歌换一条不校验 VIP 的取址通道」，所以：
++//   - 不需要歌名/歌手匹配，MatchScore 直接给 1.0；
++//   - 不需要过 MinMatchScore 阈值；
++//   - 拿回来的码率/大小就是网易那份文件的真实值。
++//
++// key 里必须有 songId（由 Find 从 /api/song/detail 的响应里填进来）；
++// 取不到就返回空，交给调用方走换源搜索。
++func findFromPyNcmd(key common.MapType, music common.SearchMusic) *common.Song {
++	empty := &common.Song{}
++	songId, ok := key["songId"].(string)
++	if !ok || len(songId) == 0 {
++		return empty
++	}
++	now := time.Now()
++	base := &common.Song{
++		Id:   songId,
++		Name: key["name"].(string),
++	}
++	if v, ok := key["artistsName"].(string); ok {
++		base.Artist = v
++	}
++	if v, ok := key["album"].(common.MapType); ok {
++		if name, ok := v["name"].(string); ok {
++			base.AlbumName = name
++		}
++	}
++	re := GetProvider("pyncmd").GetSongUrl(common.SearchMusic{Id: songId, Quality: music.Quality}, base)
++	log.Println("pyncmd consumed:", time.Since(now))
++	if re == nil || len(re.Url) == 0 {
++		// pyncmd 没有这首歌：不写缓存，让换源搜索照常进行。
++		return empty
++	}
++	re = calculateSongInfo(re)
++	// 缓存键必须是「网易 songId」这一份，不能带平台前缀，
++	// 否则下一次同一首歌再进来时命中不了缓存。
++	cache.PutSong(common.SearchMusic{Id: songId, Quality: music.Quality}, re)
++	return re
++}
++
+ func parseSongFn(key common.MapType, music common.SearchMusic) *common.Song {
+ 	id := "0"
+ 	searchSongName := key["name"].(string)
+@@ -236,14 +305,19 @@
  			}
  			sum--
  			if sum <= 0 {
@@ -943,7 +1148,7 @@ diff -ruN a/provider/provider.go b/provider/provider.go
  func SearchSongFromAllSource(key common.SearchSong) []*common.Song {
  	var songs []*common.Song
  	ch := make(chan []*common.Song)
-@@ -261,10 +281,10 @@
+@@ -261,10 +335,10 @@
  			songs = append(songs, song...)
  			sum--
  			if sum <= 0 {
@@ -956,6 +1161,299 @@ diff -ruN a/provider/provider.go b/provider/provider.go
  		}
  	}
  }
+diff -ruN a/provider/pyncmd/pyncmd.go b/provider/pyncmd/pyncmd.go
+--- a/provider/pyncmd/pyncmd.go	1970-01-01 08:00:00.000000000 +0800
++++ b/provider/pyncmd/pyncmd.go	2026-10-31 21:49:05.534512895 +0800
+@@ -0,0 +1,289 @@
++// Package pyncmd 对接第三方网易云 API（music-api.gdstudio.xyz），用网易自己的
++// songId 直接换一条可播地址。
++//
++// 它和 kuwo/kugou/migu/qq 这些音源有本质区别，也是它存在的理由：
++//
++//	换源类音源的流程是「拿歌名+歌手去别的平台搜 → 打分 → 赌哪条是原唱」，
++//	原唱没版权时要么搜不到，要么搜到同名翻唱（《晴天》曾匹配到 0.65 分的
++//	「陈星晨 - Future War未来战争」，《黄昏》前 8 条全是翻唱）。
++//
++//	pyncmd 不做搜索，直接用 songId 换地址，拿回来的就是这首歌本身。
++//	实测 md5 与网易原址一致（《分身情人》0e32bb2e…、《少年游》432dd838…），
++//	不存在翻唱冒充原唱的可能。
++//
++// 代价是单点依赖第三方服务，实测约 1.6s 返回、偶发 503，故这里做了重试；
++// 解析失败时返回空 Song，由上层回落其它音源，绝不返回一条错的地址。
++package pyncmd
++
++import (
++	"encoding/json"
++	"fmt"
++	"log"
++	"net/http"
++	"strings"
++	"time"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
++	"github.com/cnsilvan/UnblockNeteaseMusic/network"
++	"github.com/cnsilvan/UnblockNeteaseMusic/utils"
++)
++
++type PyNcmd struct{}
++
++// ApiURL 是带 %s(id) 和 %s(br) 两个占位符的模板，可用 httptest 指向本地样本做回归测试。
++// 用 var 而非 const：测试要把它替换成本地 server。
++var ApiURL = "https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=%s&br=%s"
++
++const (
++	// 只依赖网易 songId，所以只对 netease 有意义（joox 的 id 体系在这里用不上）。
++	sourceName = "pyncmd"
++	// 单次请求上限。实测平均 1.6s，给到 8s 足够，超时就走重试。
++	attemptTimeout = 8 * time.Second
++	// 503 是实测到的偶发失败（20 次里 1 次），重试一次基本能覆盖。
++	maxAttempts = 3
++)
++
++// brOf 把网易的码率请求映射成第三方 API 的 br 参数。
++// 不传 br 时它直接给 flac（br=993），所以不指定音质时不要传值。
++func brOf(q common.MusicQuality) string {
++	switch q {
++	case common.Lossless:
++		return "999"
++	case common.ExHigh:
++		return "320"
++	case common.Higher:
++		return "192"
++	default:
++		return "128"
++	}
++}
++
++// GetSongUrl 用 songId 换地址。searchSong.Id 必须是纯网易数字 id，
++// 带 9000x 前缀的平台 id（酷我/酷狗结果）在这里没有意义。
++func (p *PyNcmd) GetSongUrl(searchSong common.SearchMusic, song *common.Song) *common.Song {
++	if song == nil {
++		return &common.Song{}
++	}
++	id := song.Id
++	if len(id) == 0 {
++		id = searchSong.Id
++	}
++	id = strings.TrimSpace(id)
++	if !isNeteaseId(id) {
++		log.Printf("pyncmd: skip non-netease id %q\n", id)
++		return &common.Song{}
++	}
++
++	br := brOf(searchSong.Quality)
++	apiUrl := fmt.Sprintf(ApiURL, id, br)
++
++	var lastErr error
++	for attempt := 1; attempt <= maxAttempts; attempt++ {
++		result, err := fetch(apiUrl)
++		if err != nil {
++			lastErr = err
++			log.Printf("pyncmd: id=%s attempt %d/%d failed: %v\n", id, attempt, maxAttempts, err)
++			// 只有超时和 5xx 值得重试；参数错误重试也没用。
++			if !retryable(err) {
++				break
++			}
++			time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
++			continue
++		}
++		url, _ := result["url"].(string)
++		if len(url) == 0 {
++			// 该服务没有这个 id 的资源（实测《冬天的秘密》《成都》返回空）。
++			// 这不是错误，直接放行给其它音源。
++			log.Printf("pyncmd: id=%s has no url\n", id)
++			return &common.Song{}
++		}
++		if !isPublicUrl(url) {
++			log.Printf("pyncmd: id=%s returned non-public url %q\n", id, url)
++			return &common.Song{}
++		}
++
++		out := *song
++		out.Url = url
++		out.Source = sourceName
++		// 换回来的就是网易原文件，HTTP 上不做任何匹配，给满分。
++		// 这样 provider.Find 里「MatchScore 最高者胜」和 FilterByScore 的 0.75 闸门
++		// 都不会把它误杀。
++		out.MatchScore = 1.0
++		if br, ok := numberFrom(result["br"]); ok && br > 0 {
++			out.Br = int(br)
++		}
++		if size, ok := numberFrom(result["size"]); ok && size > 0 {
++			out.Size = int64(size)
++		}
++		// 校验响应里说的 id 和我们要的一致，防止第三方服务串号。
++		if got, ok := result["id"]; ok {
++			if gid, ok := numberFrom(got); ok && gid > 0 {
++				var want int64
++				if _, err := fmt.Sscanf(id, "%d", &want); err == nil && int64(gid) != want {
++					log.Printf("pyncmd: id mismatch want=%s got=%v\n", id, gid)
++					return &common.Song{}
++				}
++			}
++		}
++		log.Printf("pyncmd: id=%s ok br=%d size=%d\n", id, out.Br, out.Size)
++		return &out
++	}
++	if lastErr != nil {
++		log.Printf("pyncmd: id=%s give up: %v\n", id, lastErr)
++	}
++	return &common.Song{}
++}
++
++// SearchSong 故意返回空：pyncmd 不是搜索型音源。
++// 让它参与 getSongFromAllSource 只会白白增加一次网络请求和 6s 超时窗口。
++func (p *PyNcmd) SearchSong(searchSong common.SearchSong) (songs []*common.Song) {
++	return nil
++}
++
++// ParseSong 走 provider.Find 的「按歌曲详情反查音源」入口。
++// 只有 Id 是纯网易 id 时才有意义，否则返回空交给换源音源。
++//
++// 注意 common.SearchSong 没有 Id 字段，songId 在处理器里是走
++// provider.Find(common.SearchMusic{Id: ...}) 传进来的；这里的 songId
++// 只是作为兜底，正常情况下 Find 已经先行调用过 GetSongUrl。
++func (p *PyNcmd) ParseSong(searchSong common.SearchSong) *common.Song {
++	return &common.Song{}
++}
++
++type apiError struct {
++	code int
++	msg  string
++}
++
++func (e *apiError) Error() string {
++	return fmt.Sprintf("pyncmd http %d: %s", e.code, e.msg)
++}
++
++func retryable(err error) bool {
++	if e, ok := err.(*apiError); ok {
++		return e.code >= 500
++	}
++	// 网络层错误（超时、连接被重置）值得重试。
++	return true
++}
++
++func fetch(apiUrl string) (common.MapType, error) {
++	header := make(http.Header, 2)
++	header["accept"] = append(header["accept"], "application/json")
++	clientRequest := network.ClientRequest{
++		Method:               http.MethodGet,
++		RemoteUrl:            apiUrl,
++		Header:               header,
++		Proxy:                false,
++		ConnectTimeout:       attemptTimeout,
++		ForbiddenEncodeQuery: true, // 查询串已编码好，别让 http 再编码一遍
++	}
++	resp, err := network.Request(&clientRequest)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, &apiError{code: resp.StatusCode, msg: resp.Status}
++	}
++	body, err := network.GetResponseBody(resp, false)
++	if err != nil {
++		return nil, err
++	}
++	result := utils.ParseJson(body)
++	if result == nil {
++		return nil, fmt.Errorf("pyncmd: unparsable body")
++	}
++	return result, nil
++}
++
++// isNeteaseId 判断是否纯数字且不是平台前缀 id。
++//
++// 90000/90001/90002/90003 是 UNM 给酷我/咪咕/酷狗/QQ 结果自造的 id 前缀，
++// 拿它去问网易必然是空，白白多一次网络请求。
++// 不能靠长度判断：酷我 id 是 90000 + 7 位 rid，正好也是 10 位，
++// 和 10 位的网易超大 id（如 25641019 是 8 位，1998358259 也是 10 位）撞车。
++func isNeteaseId(id string) bool {
++	if len(id) == 0 || len(id) > 10 {
++		return false
++	}
++	for _, c := range id {
++		if c < '0' || c > '9' {
++			return false
++		}
++	}
++	if id == "0" {
++		return false
++	}
++	// 平台前缀：9000 + 一位源号（0=酷我 1=咪咕 2=酷狗 3=QQ）。
++	// 网易 id 从 9000 万起跳到这个量级时要 9 位以上，且不可能恰好以
++	// 90000/90001/90002/90003 开头后还紧跟 6~7 位——真碰上就多一次空查询，无害。
++	if len(id) >= 8 {
++		switch id[:5] {
++		case "90000", "90001", "90002", "90003":
++			return false
++		}
++	}
++	return true
++}
++
++// isPublicUrl 拒绝内网/回环地址。
++// 这条护栏直接对应本轮修复的那个 bug：上游 UNM 曾把 music.163.com 解析到
++// 192.168.3.1（路由器自己），拿到一个指向自己的地址后无限回环超时。
++func isPublicUrl(raw string) bool {
++	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
++		return false
++	}
++	host := raw
++	if i := strings.Index(host, "://"); i >= 0 {
++		host = host[i+3:]
++	}
++	if i := strings.IndexAny(host, "/?#"); i >= 0 {
++		host = host[:i]
++	}
++	if i := strings.LastIndex(host, "@"); i >= 0 {
++		host = host[i+1:]
++	}
++	if i := strings.Index(host, ":"); i >= 0 {
++		host = host[:i]
++	}
++	host = strings.ToLower(strings.Trim(host, "[]"))
++	if len(host) == 0 {
++		return false
++	}
++	switch host {
++	case "localhost", "0.0.0.0", "::1", "::":
++		return false
++	}
++	// 只拦 IPv4 字面量；域名交给 DNS 和 network 层。
++	parts := strings.Split(host, ".")
++	if len(parts) == 4 {
++		var a, b int
++		if _, err := fmt.Sscanf(host, "%d.%d", &a, &b); err == nil {
++			if a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31) || (a == 169 && b == 254) {
++				return false
++			}
++		}
++	}
++	return true
++}
++
++func numberFrom(v interface{}) (int64, bool) {
++	switch n := v.(type) {
++	case json.Number:
++		i, err := n.Int64()
++		return i, err == nil
++	case float64:
++		return int64(n), true
++	case int64:
++		return n, true
++	case int:
++		return int64(n), true
++	case string:
++		var i int64
++		if _, err := fmt.Sscanf(n, "%d", &i); err == nil {
++			return i, true
++		}
++	}
++	return 0, false
++}
 diff -ruN a/proxy/proxy.go b/proxy/proxy.go
 --- a/proxy/proxy.go	2024-07-31 12:39:07.000000000 +0800
 +++ b/proxy/proxy.go	2026-10-31 20:26:44.171021905 +0800

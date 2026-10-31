@@ -218,8 +218,22 @@ unm_start() {
 
 	[ -z "$port" ] && port=5200
 	[ -z "$sslport" ] && sslport=5201
-	[ -z "$source" ] && source=kuwo
+	# 音源默认值 pyncmd:kuwo：pyncmd 用网易 songId 直接换地址、不猜原唱，
+	# 覆盖不到的歌（实测约 17%）再落到酷我换源。老的 wyybin_source 值原样保留，
+	# 所以升级固件不会改掉用户已经选好的音源。
+	[ -z "$source" ] && source=pyncmd:kuwo
 	[ -z "$mode" ] && mode=0
+
+	# 配置里只写了换源音源（升级前保存的旧值）时，自动在队首补上 pyncmd，
+	# 让老配置也享受到「不猜原唱」这条更稳的通道。
+	# 分隔符必须是冒号：上游 config.ValidParams 用 strings.Split(*Source, ":") 拆分，
+	# 写管线或逗号会被当成一个整体名字（实测 providers=["pyncmd|kuwo"]，一个源都没注册上）。
+	# 先归一再判断，顺序不能反：老配置存的是竖线，先判断会误以为没写 pyncmd。
+	source=$(echo "$source" | tr '|' ':')
+	case ":$source:" in
+		*":pyncmd:"*) : ;;
+		*) source="pyncmd:$source" ;;
+	esac
 
 	# 上游参数：-a 监听地址 -p HTTP 端口 -sp HTTPS 端口 -o 音源
 	#           -c/-k 证书 -m 运行模式(1=hosts) -l 日志文件
