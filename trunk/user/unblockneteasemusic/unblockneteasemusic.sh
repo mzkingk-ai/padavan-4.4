@@ -364,6 +364,43 @@ unm_flag() {
 }
 
 # ---------------------------------------------------------------------------
+# 升级路径补默认值
+#   shared/defaults.c 里的默认值只在「nvram 首次初始化」时写入。从旧固件
+#   升级上来时 nvram 已经被初始化过，这些键根本不存在，于是出现两种后果：
+#     页面：nvram_match_x(...,"1") 匹配不上 → 显示成「关」
+#     脚本：unm_flag 只认精确的 "0" → 空值照旧算「开」，参数照传
+#   显示和实际行为对不上。这里在启动前把空值补成默认值，
+#   defaults.c 只认首次初始化，这里补的是已有键但值为空的情况。
+#   只补「值为空」的，用户显式选过的 0/1 一律不动。
+# ---------------------------------------------------------------------------
+unm_set_default() {
+	local key="$1" def="$2" cur
+
+	cur=$(nvram get "$key")
+	[ -n "$cur" ] && return 0
+	nvram set "$key"="$def"
+	# nvram commit 只在「确有键被补上」时做一次：
+	# 它是对 /dev/nvram 的 ioctl，每次都要写 flash，没必要为六个键写六次。
+	UNM_DEFAULTS_DIRTY=1
+}
+
+unm_apply_defaults() {
+	UNM_DEFAULTS_DIRTY=0
+
+	unm_set_default wyybin_bu 1
+	unm_set_default wyybin_ba 1
+	unm_set_default wyybin_lv 1
+	unm_set_default wyybin_sef 1
+	unm_set_default wyybin_wl 0
+	unm_set_default wyybin_qq_enable 0
+
+	if [ "$UNM_DEFAULTS_DIRTY" = "1" ]; then
+		nvram_commit
+		logger -t "网易云解锁" "已补齐缺失的功能开关默认值（升级后的首次启动）"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # 音源过滤：QQ 音源默认关闭
 #   QQ 的取址接口对未开通绿钻的账号一律返回 104003 / purl 为空，
 #   硬塞进音源列表只会每次多走一次无效请求，所以默认不放进去。
@@ -393,6 +430,9 @@ unm_start() {
 		logger -t "网易云解锁" "错误：找不到可执行文件 $UNM_BIN"
 		return 1
 	fi
+
+	# 先把升级后缺失的功能开关补成默认值，后面的读法和页面显示才对得上
+	unm_apply_defaults
 
 	# 这里不再调 unm_stop：停旧进程由调用方（start/restart 分支）负责，
 	# 否则 restart 会连续停两次，每次都要等满 10 秒的优雅退出超时。

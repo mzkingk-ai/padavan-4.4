@@ -24,6 +24,7 @@
 <script type="text/javascript" src="/help_b.js"></script>
 <script>
 var $j = jQuery.noConflict();
+var wyybin_wl_apply = function(){};
 
 var wyybin_wl_text = {
 	on:  '当前开启：每个请求的完整 JSON 都会写入日志，体积增长很快，排查完请关掉。',
@@ -52,6 +53,8 @@ $j(document).ready(function() {
 		setTimeout(wyybin_wl_refresh, 60);
 	});
 
+	// 提到 jQuery 作用域外，initial() 里要用
+	wyybin_wl_apply = wyybin_wl_refresh;
 });
 
 </script>
@@ -65,6 +68,8 @@ function initial(){
 	showmenu();
 	fill_status(wyybin_status());
 	show_footer();
+	// 自定义菜单项要等 showmenu() 把节点建出来才存在，放在后面才找得到
+	wyybin_wl_apply();
 }
 function showmenu(){
 showhide_div('alilink', found_app_aliddns());
@@ -82,18 +87,72 @@ function fill_status(status_code){
 	$("wyybin_status").innerHTML = '<span class="label label-' + (status_code != 0 ? 'success' : 'warning') + '">' + stext + '</span>';
 }
 
+/*
+ * 保存流程不用 start_apply.htm + showLoading()。
+ *
+ * start_apply.htm 的收尾靠「反向调用父窗口」：
+ *   page_modified==1 → parent.showLoading(restart_time,"waiting")
+ *   page_modified==0 → top_delay_redirect(current_page)
+ * 而 page_modified 只有在它自己的 onload 里跑到 done_committing() 才会变成 1，
+ * 那个调用又要有实际的 nvram 变化才会被 httpd 吐出来（web_ex.c：
+ * 「if (nvram_modified) done_committing(); else no_changes_and_no_committing();」）。
+ * 于是两种死法：
+ *   没有实际改动 → 不吐 done_committing → page_modified 停在 0 → 走 else 分支，
+ *                 而当前页面的 showLoading() 遮罩已经弹出，没有任何人负责收掉；
+ *   有实际改动 → parent.showLoading(0,"waiting") → 传了 "waiting" 标志时
+ *                 popup.js 不会自动 hideLoading，同样没人收。
+ *
+ * 本页改为自己发 AJAX：httpd 是单连接串行的，start_apply.htm 内联的
+ * update_variables()/asus_nvram_commit()/notify_services() 会把响应一直压到
+ * 服务重启完成才返回（wyybin 这几个键的 mask 是 EVM_RESTART_WYYBIN，走
+ * notify_rc("restart_wyy") → restart_wyybin()，其中 stop 要跑完脚本、
+ * restart_dns 还要 SIGHUP dnsmasq）。因此 ajax 的 success 回来就代表
+ * 已保存且重启完毕；出错时延迟一下再冲刷，遮罩一定会被收掉。
+ */
 function applyRule(){
+	setTimeout(function(){ unm_apply_post(); }, 100);
+}
+
+function unm_apply_post(){
 	showLoading();
 
-	document.form.action_mode.value = " Restart ";
-	document.form.current_page.value = "/Advanced_wyybin.asp";
-	document.form.next_page.value = "";
+	var postdata = {
+		current_page:  '/Advanced_wyybin.asp',
+		next_page:     '',
+		sid_list:      'WYYBIN;',
+		group_id:      '',
+		action_mode:   ' Restart ',
+		action_script: ''
+	};
+	// 用表单里的实际控件取值，value 与页面上看到的一致；
+	// 不手写字段清单，漏一个就会静默不保存。
+	jQuery('#ruleForm').find('input,select,textarea').each(function(){
+		var n = this.name;
+		if (!n || n == 'action_mode' || n == 'current_page' || n == 'next_page')
+			return;
+		if ((this.type == 'radio' || this.type == 'checkbox') && !this.checked)
+			return;
+		postdata[n] = jQuery(this).val();
+	});
 
-	document.form.submit();
+	jQuery.ajax({
+		type:     'post',
+		url:      '/start_apply.htm',
+		data:     postdata,
+		dataType: 'text',
+		timeout:  60000,
+		success:  function(){ unm_apply_done(); },
+		error:    function(){ setTimeout(unm_apply_done, 2000); }
+	});
+}
+
+function unm_apply_done(){
+	hideLoading();
+	location.href = 'Advanced_wyybin.asp';
 }
 
 function done_validating(action){
-	refreshpage();
+	unm_apply_done();
 }
 
 /*
@@ -320,44 +379,45 @@ function unm_cert_regen(){
 												<table cellpadding="2" cellspacing="0" border="0" style="width:auto">
 													<tr><th style="text-align:left;padding-right:10px"><b>-bu</b> 屏蔽升级提示</th>
 														<td><div class="main_itoggle"><div id="wyybin_bu_on_of">
-															<input type="checkbox" id="wyybin_bu_fake" <% if !nvram_match("wyybin_bu","0"): %>value=1 checked<% else %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_bu_fake" <% nvram_match_x("", "wyybin_bu", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_bu", "0", "value=0"); %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_bu" id="wyybin_bu_1" class="input" <% if !nvram_match("wyybin_bu","0"): %>checked<% endif %> />
-															<input type="radio" value="0" name="wyybin_bu" id="wyybin_bu_0" class="input" <% if nvram_match("wyybin_bu","0"): %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_bu" id="wyybin_bu_1" class="input" <% nvram_match_x("", "wyybin_bu", "1", "checked"); %> />
+															<input type="radio" value="0" name="wyybin_bu" id="wyybin_bu_0" class="input" <% nvram_match_x("", "wyybin_bu", "0", "checked"); %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-ba</b> 去广告</th>
 														<td><div class="main_itoggle"><div id="wyybin_ba_on_of">
-															<input type="checkbox" id="wyybin_ba_fake" <% if !nvram_match("wyybin_ba","0"): %>value=1 checked<% else %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_ba_fake" <% nvram_match_x("", "wyybin_ba", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_ba", "0", "value=0"); %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_ba" id="wyybin_ba_1" class="input" <% if !nvram_match("wyybin_ba","0"): %>checked<% endif %> />
-															<input type="radio" value="0" name="wyybin_ba" id="wyybin_ba_0" class="input" <% if nvram_match("wyybin_ba","0"): %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_ba" id="wyybin_ba_1" class="input" <% nvram_match_x("", "wyybin_ba", "1", "checked"); %> />
+															<input type="radio" value="0" name="wyybin_ba" id="wyybin_ba_0" class="input" <% nvram_match_x("", "wyybin_ba", "0", "checked"); %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-lv</b> 本地伪 VIP</th>
 														<td><div class="main_itoggle"><div id="wyybin_lv_on_of">
-															<input type="checkbox" id="wyybin_lv_fake" <% if !nvram_match("wyybin_lv","0"): %>value=1 checked<% else %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_lv_fake" <% nvram_match_x("", "wyybin_lv", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_lv", "0", "value=0"); %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_lv" id="wyybin_lv_1" class="input" <% if !nvram_match("wyybin_lv","0"): %>checked<% endif %> />
-															<input type="radio" value="0" name="wyybin_lv" id="wyybin_lv_0" class="input" <% if nvram_match("wyybin_lv","0"): %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_lv" id="wyybin_lv_1" class="input" <% nvram_match_x("", "wyybin_lv", "1", "checked"); %> />
+															<input type="radio" value="0" name="wyybin_lv" id="wyybin_lv_0" class="input" <% nvram_match_x("", "wyybin_lv", "0", "checked"); %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-sef</b> 解锁音效</th>
 														<td><div class="main_itoggle"><div id="wyybin_sef_on_of">
-															<input type="checkbox" id="wyybin_sef_fake" <% if !nvram_match("wyybin_sef","0"): %>value=1 checked<% else %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_sef_fake" <% nvram_match_x("", "wyybin_sef", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_sef", "0", "value=0"); %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_sef" id="wyybin_sef_1" class="input" <% if !nvram_match("wyybin_sef","0"): %>checked<% endif %> />
-															<input type="radio" value="0" name="wyybin_sef" id="wyybin_sef_0" class="input" <% if nvram_match("wyybin_sef","0"): %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_sef" id="wyybin_sef_1" class="input" <% nvram_match_x("", "wyybin_sef", "1", "checked"); %> />
+															<input type="radio" value="0" name="wyybin_sef" id="wyybin_sef_0" class="input" <% nvram_match_x("", "wyybin_sef", "0", "checked"); %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-wl</b> 打印请求全文</th>
 														<td><div class="main_itoggle"><div id="wyybin_wl_on_of">
-															<input type="checkbox" id="wyybin_wl_fake" <% if !nvram_match("wyybin_wl","0"): %>value=1 checked<% else %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_wl_fake" <% nvram_match_x("", "wyybin_wl", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_wl", "0", "value=0"); %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_wl" id="wyybin_wl_1" class="input" <% if nvram_match("wyybin_wl","1"): %>checked<% endif %> />
-															<input type="radio" value="0" name="wyybin_wl" id="wyybin_wl_0" class="input" <% if nvram_match("wyybin_wl","0") || nvram_get_x("", "wyybin_wl") == "": %>checked<% endif %> />
-														</div></td></tr>
+															<input type="radio" value="1" name="wyybin_wl" id="wyybin_wl_1" class="input" <% nvram_match_x("", "wyybin_wl", "1", "checked"); %> />
+															<input type="radio" value="0" name="wyybin_wl" id="wyybin_wl_0" class="input" <% nvram_match_x("", "wyybin_wl", "0", "checked"); %> />
+														</div>
+														<div id="wyybin_wl_hint" style="font-size:12px;margin-top:4px"></div></td></tr>
 												</table>
 												<br>未设置时按默认值：<b>-bu -ba -lv -sef 开启，-wl 关闭</b>。<br>
 												这几个开关对应上游的无值参数（<code>-bu</code> 之类），语义只有「传 = 开，不传 = 关」，
@@ -371,11 +431,11 @@ function unm_cert_regen(){
 										<th>QQ 音源</th>
 											<td>
 												<div class="main_itoggle"><div id="wyybin_qq_enable_on_of">
-													<input type="checkbox" id="wyybin_qq_enable_fake" <% if nvram_match("wyybin_qq_enable","1"): %>value=1 checked<% else %>value=0<% endif %> />
+													<input type="checkbox" id="wyybin_qq_enable_fake" <% nvram_match_x("", "wyybin_qq_enable", "1", "value=1 checked"); %><% nvram_match_x("", "wyybin_qq_enable", "0", "value=0"); %> />
 												</div></div>
 												<div style="position: absolute; margin-left: -10000px;">
-													<input type="radio" value="1" name="wyybin_qq_enable" id="wyybin_qq_enable_1" class="input" <% if nvram_match("wyybin_qq_enable","1"): %>checked<% endif %> />
-													<input type="radio" value="0" name="wyybin_qq_enable" id="wyybin_qq_enable_0" class="input" <% if !nvram_match("wyybin_qq_enable","1"): %>checked<% endif %> />
+													<input type="radio" value="1" name="wyybin_qq_enable" id="wyybin_qq_enable_1" class="input" <% nvram_match_x("", "wyybin_qq_enable", "1", "checked"); %> />
+													<input type="radio" value="0" name="wyybin_qq_enable" id="wyybin_qq_enable_0" class="input" <% nvram_match_x("", "wyybin_qq_enable", "0", "checked"); %> />
 												</div>
 											</td>
 										</tr>
