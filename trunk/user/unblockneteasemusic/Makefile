@@ -59,12 +59,14 @@ patch_test:
 # 1) 编译器必须是 go1.22。go1.23+ 的 runtime 用 lock_spinbit 自旋锁，在 MT7621
 #    上让 futex 返回 -89，产物一启动就 SIGSEGV（PC=0x77c00 runtime.futexwakeup）。
 #
-# 2) 必须 UPX -9 --lzma 压缩，且必须压 go1.22 的产物。
-#    7.34MB -> 1.76MB（23.97%），固件从 12.32MB 降到 10.95MB。
-#    早期曾记录「UPX 压缩版同样 SIGSEGV」，2026-11-01 在 NEWIFI3(D2) / 4.4.198
-#    上实测推翻了该结论：压缩版 -v 自检 rc=0，:18080 正常 LISTEN，
-#    明文代理真实请求返回 HTTP/1.1 200 OK（真实 JSON），无 futex -89。
-#    当时出问题的是宿主机 go1.26 编出来的 8.7MB 产物（见约束 1），不是 UPX 本身。
+# 2) 【当前暂停 UPX 压缩】UNM_UPX_ENABLE := n
+#    压缩本身有效（7.34MB -> 1.76MB，固件少约 1.37MB），且压缩版曾在
+#    NEWIFI3(D2) / 4.4.198 上真机验过 -v 与 :18080 代理。
+#    但 2026-11-01 完整固件构建时，upx 在 make 子进程里稳定 SIGSEGV
+#    （单独跑同一条命令 8/8 通过；core 显示崩在 upx 静态二进制的 startup 段，
+#    RSP/RIP 落在栈与代码段之外，是 upx 自身 memcpy 到坏地址，与输入文件无关）。
+#    在查清之前先关掉，产物保持未压缩的 7.34MB。
+#    想恢复：把下面的 UNM_UPX_ENABLE 改成 y 即可，其余逻辑都在。
 #
 # 3) 字节序：MT7621 是 MIPS32r2 **小端**（工具链 mipsel-*、固件里 smartdns/dnsmasq/
 #    libuClibc 全是 LSB）。Go 的 GOARCH=mips 产出的是**大端**，上机会 exec format error，
@@ -74,6 +76,7 @@ patch_test:
 # 本包每次构建都会重跑 go build 覆盖 bin/，手工压过的版本会被冲掉。
 # 优先用 PATH 上的 upx；宿主的 ~/.local/bin 在容器内不可见（没挂载），
 # 所以回退到随源码提交的静态版 trunk/tools/bin/upx。
+UNM_UPX_ENABLE := n
 UNM_UPX := $$(command -v upx || echo $(THISDIR)/../../tools/bin/upx)
 
 build:
@@ -93,8 +96,12 @@ build:
 			-o $(THISDIR)/bin/UnblockNeteaseMusic . ; \
 	)
 	@echo "built: $$(stat -c %s $(THISDIR)/bin/UnblockNeteaseMusic) bytes"
+ifeq ($(UNM_UPX_ENABLE),y)
 	$(UNM_UPX) -9 --lzma $(THISDIR)/bin/UnblockNeteaseMusic
 	@echo "packed: $$(stat -c %s $(THISDIR)/bin/UnblockNeteaseMusic) bytes"
+else
+	@echo "packed: skipped (UNM_UPX_ENABLE=n)"
+endif
 
 clean:
 	rm -rf $(THISDIR)/$(UNM_SRC)
