@@ -110,3 +110,21 @@ romfs:
 	$(ROMFSINST) -p +x $(THISDIR)/bin/UnblockNeteaseMusic /usr/bin/UnblockNeteaseMusic
 	$(ROMFSINST) -p +x $(THISDIR)/unblockneteasemusic.sh /usr/bin/unblockneteasemusic.sh
 	$(ROMFSINST) $(THISDIR)/README.md /etc/UnblockNeteaseMusic.md
+	#
+	# 出厂默认证书套装。
+	# 装到 /etc/unm-cert-default 而不是直接进 /etc/storage：
+	# /etc/storage 是 mtd_storage.sh 管理的持久化分区，
+	# 用 tar 把整个目录打个包写 flash，里面没有的文件刷固件后就没了。
+	# 由 /sbin/mtd_storage.sh 的 func_fill（dev_init.sh 每次开机调用
+	# `mtd_storage.sh fill`）在「目标目录不存在」时拷过去 ——
+	# 已经存在的绝不覆盖，所以用户自己的证书和已经装过的客户端 CA 不受影响。
+	#
+	# 注意要先建目录：ROMFSINST 只是 cp，romfs 里没有 /etc/unm-cert-default
+	# 这个目录就会直接报 "No such file or directory"。
+	# （不能用 ROMFSINST -d：那个 -d 是「src 是目录、整棵拷过去」的意思，
+	#   传一个不存在的 src 反而报 cp: cannot stat。）
+	@mkdir -p $(ROMFSDIR)/etc/unm-cert-default
+	$(ROMFSINST) -p 644 $(THISDIR)/cert/ca.crt /etc/unm-cert-default/ca.crt
+	$(ROMFSINST) -p 600 $(THISDIR)/cert/ca.key /etc/unm-cert-default/ca.key
+	$(ROMFSINST) -p 644 $(THISDIR)/cert/server.crt /etc/unm-cert-default/server.crt
+	$(ROMFSINST) -p 600 $(THISDIR)/cert/server.key /etc/unm-cert-default/server.key

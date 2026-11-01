@@ -21,6 +21,11 @@ UNM_LOG="/tmp/unblockneteasemusic.log"
 # 守护冷却时间戳。放 /tmp 是故意的：重启后清零，第一次 cron 就能正常拉起
 UNM_WATCH_STAMP="/tmp/unblockneteasemusic.watch"
 UNM_DIR="/etc/storage/unblockneteasemusic"
+# 出厂证书套装放在 romfs 里，由 /sbin/mtd_storage.sh 的 func_fill 在首次开机时
+# 拷到 $UNM_DIR（见 user/unblockneteasemusic/Makefile 的 romfs 段）。
+# 这里自己也认这个目录：/etc/storage 被用户清空过、或者目标目录被删掉时，
+# 脚本可以从这里再拷一份，免得又跑一次 openssl 生成一套新 CA。
+UNM_DEFAULT_CERT_DIR="/etc/unm-cert-default"
 # 证书相关文件的实际路径由 unm_resolve_cert_paths 按 wyybin_cert 计算，
 # 这里只给默认值兜底（命令分发前一定会先调用一次）。
 UNM_CSR="$UNM_DIR/server.csr"
@@ -145,6 +150,100 @@ unm_resolve_cert_paths() {
 	# 把证书指到 U 盘依然能生成，不会因为写不进 dn.cnf 而失败。
 	UNM_CSR="$UNM_CERT_DIR/server.csr"
 	UNM_EXT="$UNM_CERT_DIR/ext.cnf"
+}
+
+# 目标证书目录里「已经有证书了吗」。
+# 只看 ca.crt 与 server.crt 这两个证书本体：私钥缺失说明是残套，
+# 交给 unm_check_cert 处理（它会用现有 CA 只重签 server.crt），
+# 这里不去覆盖，免得把用户好不容易装过客户端的 CA 换掉。
+unm_cert_dir_has_certs() {
+	[ -s "$1/ca.crt" ] || [ -s "$1/server.crt" ]
+}
+
+# ---------------------------------------------------------------------------
+# 把证书目录设成 $1（写 nvram），目标目录没有证书时先从默认目录拷一份过去。
+#
+# 为什么要在「改配置之前」拷：
+#   证书目录可以指到 U 盘。U 盘路径第一次用的时候是空的，如果只改 nvram
+#   不管文件，下一次 unm_check_cert 会直接在里面生成一套**全新的 CA**，
+#   客户端之前装的 ca.crt 立刻失效，用户完全看不出发生了什么。
+#   所以先把默认目录那套原样搬过去，客户端装的 CA 继续有效。
+#
+# 拷贝只在目标目录「没有任何证书」时做，目标目录已有证书一律不动。
+# 目标目录不存在时只补建最后一层（理由同 unm_check_cert ②，
+# 不能 mkdir -p 出一条并不存在的挂载点）。
+# ---------------------------------------------------------------------------
+unm_prepare_cert_dir() {
+	local dir="$1"
+	local src="$UNM_DEFAULT_CERT_DIR"
+	local f copied n=0
+
+	[ -n "$dir" ] || return 1
+	dir=$(unm_abspath "$dir")
+	while [ "$dir" != "/" ] && [ "${dir%/}" != "$dir" ]; do
+		dir="${dir%/}"
+	done
+
+	if unm_cert_dir_has_certs "$dir"; then
+		echo "OK|目标目录已有证书，不做拷贝：$dir"
+		return 0
+	fi
+
+	# 源目录：优先出厂套装，其次是默认证书目录（$UNM_DIR）。
+	# 出厂套装在 romfs 里，一定能读到；$UNM_DIR 里的那套可能是用户
+	# 自己签的、或者别人已经装到客户端上的，优先级放后面。
+	if ! unm_cert_dir_has_certs "$src"; then
+		src="$UNM_DIR"
+	fi
+	if ! unm_cert_dir_has_certs "$src"; then
+		echo "WARN|源目录没有可拷贝的证书：$src（目标目录会按需自动生成一套新 CA）"
+		return 0
+	fi
+
+	if [ ! -d "$dir" ]; then
+		if [ ! -d "$(dirname "$dir")" ]; then
+			echo "ERR|[迁移证书]目标目录不存在：$dir（U 盘未挂载或路径写错），已取消"
+			return 1
+		fi
+		if ! mkdir -p "$dir" 2>/dev/null; then
+			echo "ERR|[迁移证书]无法创建目录：$dir"
+			return 1
+		fi
+	fi
+	if [ ! -w "$dir" ]; then
+		echo "ERR|[迁移证书]目标目录不可写：$dir（U 盘是否只读挂载？），已取消"
+		return 1
+	fi
+
+	for f in ca.crt ca.key server.crt server.key; do
+		[ -f "$src/$f" ] || continue
+		if cp -f "$src/$f" "$dir/$f" 2>/dev/null; then
+			n=$((n + 1))
+		fi
+	done
+
+	# 私钥收紧权限：cp 会沿用 umask，两个私钥不应该是 644
+	chmod 600 "$dir/ca.key" "$dir/server.key" 2>/dev/null
+	chmod 644 "$dir/ca.crt" "$dir/server.crt" 2>/dev/null
+
+	if [ "$n" -eq 0 ]; then
+		echo "ERR|[迁移证书]拷贝失败：$src → $dir"
+		return 1
+	fi
+
+	# 拷贝后必须能验通，否则「拷了但客户端照样不认」比直接报错更难排查
+	if [ -s "$dir/ca.crt" ] && [ -s "$dir/server.crt" ]; then
+		if ! openssl verify -CAfile "$dir/ca.crt" "$dir/server.crt" >/dev/null 2>&1; then
+			echo "WARN|已拷贝 $n 个文件到 $dir，但 server.crt 与 ca.crt 校验不通过（服务会按需重签）"
+			return 0
+		fi
+	fi
+
+	echo "OK|已从 $src 拷贝 $n 个证书文件到 $dir"
+	if [ -s "$dir/ca.crt" ]; then
+		echo "CA_END=$(openssl x509 -in "$dir/ca.crt" -noout -enddate 2>/dev/null | cut -d= -f2)"
+	fi
+	return 0
 }
 
 # 已有证书「还能不能接着用」的统一判定。
@@ -456,6 +555,92 @@ unm_apply_defaults() {
 		nvram_commit
 		logger -t "网易云解锁" "已补齐缺失的功能开关默认值（升级后的首次启动）"
 	fi
+}
+
+# ---------------------------------------------------------------------------
+# 恢复默认配置（页面「恢复默认配置」按钮）
+#
+# 与 unm_apply_defaults 的区别：那个只补空值、保住用户的选择；
+# 这个是**无条件**写回出厂值，用于「配置被改坏了，一键回到刚刷完固件的样子」。
+#
+# 默认值必须和 shared/defaults.c 的 APP_WYYBIN 段、以及页面上的
+# placeholder/默认提示保持一致，改一处就要改三处：
+#   wyybin_enable     0        总开关关了（用户点「恢复默认」多半是想重来，
+#                              保留开启会让证书目录重置后立刻又开始跑）
+#   wyybin_port       ""(5200) 留空让脚本用内置默认值，页面 placeholder 也是这个
+#   wyybin_sslport    ""(5201)
+#   wyybin_mode       0        纯代理
+#   wyybin_source     ""(pyncmd:kuwo:kugou:migu)
+#   wyybin_minscore   ""(0.75)
+#   wyybin_extra      ""
+#   wyybin_cert       ""(=/etc/storage/unblockneteasemusic)
+#   wyybin_proxy      ""
+#   wyybin_bu/ba/lv/sef  1
+#   wyybin_wl          0
+#   wyybin_qq_enable   0
+#
+# 证书目录重置回默认之后，还要确认那里真的有证书：
+#   优先把出厂套装 /etc/unm-cert-default 拷回去（CA 不变，客户端不用重装）；
+#   出厂套装不在（老固件）才交给 unm_check_cert 现场生成。
+# ---------------------------------------------------------------------------
+unm_reset_defaults() {
+	local key f src="$UNM_DEFAULT_CERT_DIR" n=0
+
+	for key in wyybin_enable wyybin_port wyybin_sslport wyybin_mode \
+	           wyybin_source wyybin_minscore wyybin_extra wyybin_cert \
+	           wyybin_proxy wyybin_bu wyybin_ba wyybin_lv wyybin_sef \
+	           wyybin_wl wyybin_qq_enable; do
+		nvram unset "$key"
+	done
+	nvram set wyybin_enable=0
+	nvram set wyybin_mode=0
+	nvram set wyybin_bu=1
+	nvram set wyybin_ba=1
+	nvram set wyybin_lv=1
+	nvram set wyybin_sef=1
+	nvram set wyybin_wl=0
+	nvram set wyybin_qq_enable=0
+	nvram commit
+	logger -t "网易云解锁" "已恢复默认配置（页面按钮）"
+
+	# 证书目录回到默认位置，并保证那里有一套可用证书
+	unm_resolve_cert_paths
+
+	if unm_cert_dir_has_certs "$UNM_CERT_DIR"; then
+		echo "OK|证书目录已有证书，保留不动：$UNM_CERT_DIR"
+	else
+		if unm_cert_dir_has_certs "$src"; then
+			if [ ! -d "$UNM_CERT_DIR" ]; then
+				mkdir -p "$UNM_CERT_DIR" 2>/dev/null
+			fi
+			for f in ca.crt ca.key server.crt server.key; do
+				[ -f "$src/$f" ] || continue
+				cp -f "$src/$f" "$UNM_CERT_DIR/$f" 2>/dev/null && n=$((n + 1))
+			done
+			chmod 600 "$UNM_CERT_DIR/ca.key" "$UNM_CERT_DIR/server.key" 2>/dev/null
+			chmod 644 "$UNM_CERT_DIR/ca.crt" "$UNM_CERT_DIR/server.crt" 2>/dev/null
+		fi
+		if [ "$n" -gt 0 ]; then
+			echo "OK|已从出厂套装恢复 $n 个证书文件到 $UNM_CERT_DIR（CA 未变，客户端无需重装）"
+		elif unm_check_cert; then
+			echo "OK|已重新生成证书到 $UNM_CERT_DIR（CA 是新的，客户端需要重装 ca.crt）"
+		else
+			echo "ERR|$UNM_LAST_ERR"
+		fi
+	fi
+
+	if [ -s "$UNM_CERT_DIR/ca.crt" ]; then
+		echo "CA_END=$(openssl x509 -in "$UNM_CERT_DIR/ca.crt" -noout -enddate 2>/dev/null | cut -d= -f2)"
+	fi
+
+	# 配置已经回到默认，进程要按新配置重启（总开关现在是关的，所以是停）
+	if [ -n "$(unm_pids)" ]; then
+		unm_stop
+		if [ "$(nvram get wyybin_enable)" = "1" ]; then
+			unm_start >/dev/null 2>&1
+		fi
+	fi
+	return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -771,8 +956,29 @@ regen)
 		unm_start >/dev/null 2>&1
 	fi
 	;;
+prepcert)
+	# 页面切换「证书目录」时，**先改 nvram 之前**调用：
+	#   目标目录没有证书就从默认目录拷一份过去，拷成功/无需拷贝才返回 0，
+	#   页面拿到 0 才继续发 start_apply.htm 保存新路径。
+	# $2 是页面输入框里的新目录（可能为空，表示回到默认目录）。
+	# 失败时页面中止保存，配置里的旧路径原样保留 —— 不会出现
+	# 「配置指着一个没有证书的目录」这种半残状态。
+	unm_resolve_cert_paths
+	dir="$2"
+	[ -n "$dir" ] || dir="$UNM_DIR"
+	if unm_prepare_cert_dir "$dir"; then
+		echo "DIR=$(unm_abspath "$dir")"
+	else
+		exit 1
+	fi
+	;;
+resetdefault)
+	# 页面「恢复默认配置」：无条件写回出厂值，并把证书目录重置回默认，
+	# 再按新配置重启进程（默认总开关是关的，所以实际是停掉）。
+	unm_reset_defaults
+	;;
 *)
-	echo "Usage: $0 {start|stop|restart|status|watch|cert|regen}"
+	echo "Usage: $0 {start|stop|restart|status|watch|cert|regen|prepcert <dir>|resetdefault}"
 	exit 1
 	;;
 esac
