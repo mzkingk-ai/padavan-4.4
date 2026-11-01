@@ -2345,14 +2345,33 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 {
 	struct variable *v;
 	char *action_mode = websGetVar(wp, "action_mode", "");
-	int regen = (!strcmp(action_mode, " RegenCertWYYBIN "));
+	/*
+	 * 注意前后各有一个空格，这是本工程 action_mode 的惯例
+	 * （apply_cgi 里全是 !strcmp(value, " Reboot ") 这种写法）。
+	 * 页面按惯例带上空格；这里再用 trim 兜一层，免得写成
+	 * "CheckCertWYYBIN" 的调用方被静默当成「检查」之外的未知动作。
+	 */
+	while (*action_mode == ' ')
+		action_mode++;
+	{
+		char *e = action_mode + strlen(action_mode);
+		while (e > action_mode && e[-1] == ' ')
+			*--e = 0;
+	}
+	int regen = (!strcmp(action_mode, "RegenCertWYYBIN"));
 	int sid;
-	char buf[512];
+	/*
+	 * 脚本输出就是 OK|dir / END= / SUBJ= / FILES= 四行，FILES 那一行
+	 * 会把这个目录里所有文件名连成一串，长文件名多几个就可能上百字节。
+	 * 2048 足够，并且比 512 留了余量；读满即止，不会无限占内存。
+	 */
+	char buf[2048];
 	FILE *f;
 	size_t n = 0;
 
-	/* 未登录时不允许改证书。这里借 EVM_WYYBIN_CERT_ADMIN 的
-	   EVM_BLOCK_UNSAFE 位做判断，与 validate_asp_apply() 的口径一致 */
+	/* 未登录时不允许改证书。这里查 wyybin_cert 变量的
+	   EVM_BLOCK_UNSAFE 位（variables.c 里与 EVM_RESTART_WYYBIN 一起设置），
+	   与 validate_asp_apply() 的口径一致 */
 	sid = LookupServiceId("WYYBIN");
 	if (sid >= 0) {
 		for (v = GetVariables(sid); v->name != NULL; ++v) {
@@ -2372,7 +2391,7 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 		return 0;
 	}
 
-	/* 原样转发，最多 4KB，够放 Ok/cert/key/subj 四行 */
+	/* 原样转发，够放 OK|dir / END / SUBJ / FILES 四行 */
 	while (n < sizeof(buf) - 1) {
 		int c = fgetc(f);
 		if (c == EOF)

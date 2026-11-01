@@ -97,9 +97,13 @@ function done_validating(action){
 }
 
 /*
- * 证书查询/生成走 start_apply.htm 的专用动作，不用 apply.cgi：
- *   CheckCertWYYBIN   只读，返回脚本直接吐出的 key=value 文本行
- *   RegenCertWYYBIN   强制删掉现有证书后重签（会换 CA，客户端要重装）
+ * 证书查询/生成走 update.cgi?output=wyybin_cert，映射到 web_ex.c 里的
+ * wyybin_cert_hook，响应体是脚本直接吐出的 key=value 文本行。
+ * 不要用 start_apply.htm：它命中 mime_handlers 的 "**.htm*" → do_ej，
+ * 只做模板渲染、根本不执行提交，AJAX 拿回来的是整页 HTML，
+ * 再被塞进 result 区就成了"页面显示一堆 HTML 源码"。
+ *   action_mode= CheckCertWYYBIN   只读，检查当前（已保存的）路径
+ *   action_mode= RegenCertWYYBIN   强制重签（会换 CA，客户端要重装）
  * 结果里的路径可能来自 U 盘，这里只做 HTML 转义，不做任何解析。
  */
 function unm_cert_escape(s){
@@ -124,9 +128,10 @@ function unm_cert_post(action_mode, prelude){
 	$j('#unm_cert_result').html('<span style="color:#666">查询中…</span>');
 	$j.ajax({
 		type: 'post',
-		url: '/start_apply.htm',
-		data: { action_mode: action_mode },
+		url: '/update.cgi',
+		data: { output: 'wyybin_cert', action_mode: action_mode },
 		dataType: 'text',
+		timeout: 60000,
 		error: function(){
 			unm_cert_show('ERR|请求失败，请确认登录尚未过期', false, '');
 		},
@@ -256,7 +261,8 @@ function unm_cert_regen(){
 										<th>HTTPS 监听端口</th>
 											<td>
 												<input type="text" class="input" name="wyybin_sslport" id="wyybin_sslport" style="width: 100px" value="<% nvram_get_x("", "wyybin_sslport"); %>" />
-												<br>默认 5201，服务会自动生成自签证书，客户端需关闭证书校验
+												<br>默认 5201。证书由下方「证书目录」里的自签 CA 签发：把 <b>ca.crt</b> 装到客户端当受信任根证书即可正常校验，
+												不装也能用（客户端选择忽略证书错误）——但 CA 换过之后必须重新装。
 											</td>
 										</tr>
 
@@ -288,10 +294,12 @@ function unm_cert_regen(){
 													<option value="kuwo:kugou:migu" <% nvram_match_x("", "wyybin_source", "kuwo:kugou:migu", "selected"); %>>酷我 + 酷狗 + 咪咕</option>
 													<option value="kuwo:kugou:migu:qq" <% nvram_match_x("", "wyybin_source", "kuwo:kugou:migu:qq", "selected"); %>>全部四个换源音源</option>
 												</select>
-												<br>找不到原曲时依次尝试的音源，选项越多越慢但命中率越高<br>
+												<br>找不到原曲时用来兜底的音源，<b>全部同时发出、6 秒内谁先给结果用谁</b>；
+												选项多不会明显变慢（只多几个并发请求），但命中率更高。<br>
 												<b>pyncmd</b> 是第三方网易云取址 API：不做搜索匹配，直接用网易 songId 换一条地址，
 												拿到的是网易原文件（320k/mp3），<b>不会把翻唱当原唱</b>。实测周传雄/魏晨等 VIP 歌 10/12 可解。<br>
-												它覆盖不到的歌会自动落到后面的换源音源，所以建议用「pyncmd 优先 + 酷我兜底」。
+												pyncmd 与上面的换源音源<b>同时</b>发出：pyncmd 有结果就直接用它（它是网易原曲，优先）；
+												没有才按匹配分从换源结果里取最高的一条。所以建议用「pyncmd 优先 + 酷我兜底」。
 											</td>
 										</tr>
 
@@ -312,39 +320,39 @@ function unm_cert_regen(){
 												<table cellpadding="2" cellspacing="0" border="0" style="width:auto">
 													<tr><th style="text-align:left;padding-right:10px"><b>-bu</b> 屏蔽升级提示</th>
 														<td><div class="main_itoggle"><div id="wyybin_bu_on_of">
-															<input type="checkbox" id="wyybin_bu_fake" <% if nvram_match("wyybin_bu","1") || nvram_get_x("", "wyybin_bu") == "": %>value=1 checked<% elif nvram_match("wyybin_bu","0"): %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_bu_fake" <% if !nvram_match("wyybin_bu","0"): %>value=1 checked<% else %>value=0<% endif %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_bu" id="wyybin_bu_1" class="input" <% if nvram_match("wyybin_bu","1") || nvram_get_x("", "wyybin_bu") == "": %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_bu" id="wyybin_bu_1" class="input" <% if !nvram_match("wyybin_bu","0"): %>checked<% endif %> />
 															<input type="radio" value="0" name="wyybin_bu" id="wyybin_bu_0" class="input" <% if nvram_match("wyybin_bu","0"): %>checked<% endif %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-ba</b> 去广告</th>
 														<td><div class="main_itoggle"><div id="wyybin_ba_on_of">
-															<input type="checkbox" id="wyybin_ba_fake" <% if nvram_match("wyybin_ba","1") || nvram_get_x("", "wyybin_ba") == "": %>value=1 checked<% elif nvram_match("wyybin_ba","0"): %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_ba_fake" <% if !nvram_match("wyybin_ba","0"): %>value=1 checked<% else %>value=0<% endif %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_ba" id="wyybin_ba_1" class="input" <% if nvram_match("wyybin_ba","1") || nvram_get_x("", "wyybin_ba") == "": %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_ba" id="wyybin_ba_1" class="input" <% if !nvram_match("wyybin_ba","0"): %>checked<% endif %> />
 															<input type="radio" value="0" name="wyybin_ba" id="wyybin_ba_0" class="input" <% if nvram_match("wyybin_ba","0"): %>checked<% endif %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-lv</b> 本地伪 VIP</th>
 														<td><div class="main_itoggle"><div id="wyybin_lv_on_of">
-															<input type="checkbox" id="wyybin_lv_fake" <% if nvram_match("wyybin_lv","1") || nvram_get_x("", "wyybin_lv") == "": %>value=1 checked<% elif nvram_match("wyybin_lv","0"): %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_lv_fake" <% if !nvram_match("wyybin_lv","0"): %>value=1 checked<% else %>value=0<% endif %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_lv" id="wyybin_lv_1" class="input" <% if nvram_match("wyybin_lv","1") || nvram_get_x("", "wyybin_lv") == "": %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_lv" id="wyybin_lv_1" class="input" <% if !nvram_match("wyybin_lv","0"): %>checked<% endif %> />
 															<input type="radio" value="0" name="wyybin_lv" id="wyybin_lv_0" class="input" <% if nvram_match("wyybin_lv","0"): %>checked<% endif %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-sef</b> 解锁音效</th>
 														<td><div class="main_itoggle"><div id="wyybin_sef_on_of">
-															<input type="checkbox" id="wyybin_sef_fake" <% if nvram_match("wyybin_sef","1") || nvram_get_x("", "wyybin_sef") == "": %>value=1 checked<% elif nvram_match("wyybin_sef","0"): %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_sef_fake" <% if !nvram_match("wyybin_sef","0"): %>value=1 checked<% else %>value=0<% endif %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
-															<input type="radio" value="1" name="wyybin_sef" id="wyybin_sef_1" class="input" <% if nvram_match("wyybin_sef","1") || nvram_get_x("", "wyybin_sef") == "": %>checked<% endif %> />
+															<input type="radio" value="1" name="wyybin_sef" id="wyybin_sef_1" class="input" <% if !nvram_match("wyybin_sef","0"): %>checked<% endif %> />
 															<input type="radio" value="0" name="wyybin_sef" id="wyybin_sef_0" class="input" <% if nvram_match("wyybin_sef","0"): %>checked<% endif %> />
 														</div></td></tr>
 													<tr><th style="text-align:left;padding-right:10px"><b>-wl</b> 打印请求全文</th>
 														<td><div class="main_itoggle"><div id="wyybin_wl_on_of">
-															<input type="checkbox" id="wyybin_wl_fake" <% if nvram_match("wyybin_wl","1"): %>value=1 checked<% elif nvram_match("wyybin_wl","0") || nvram_get_x("", "wyybin_wl") == "": %>value=0<% endif %> />
+															<input type="checkbox" id="wyybin_wl_fake" <% if !nvram_match("wyybin_wl","0"): %>value=1 checked<% else %>value=0<% endif %> />
 														</div></div>
 														<div style="position: absolute; margin-left: -10000px;">
 															<input type="radio" value="1" name="wyybin_wl" id="wyybin_wl_1" class="input" <% if nvram_match("wyybin_wl","1"): %>checked<% endif %> />
@@ -352,6 +360,8 @@ function unm_cert_regen(){
 														</div></td></tr>
 												</table>
 												<br>未设置时按默认值：<b>-bu -ba -lv -sef 开启，-wl 关闭</b>。<br>
+												这几个开关对应上游的无值参数（<code>-bu</code> 之类），语义只有「传 = 开，不传 = 关」，
+												所以<b>不存在在「附加启动参数」里把它们单独关掉</b>的写法；脚本也会把这几个从附加参数里剔除。<br>
 												<b>-wl</b> 会把每个请求和响应的完整 JSON 写进 <b>/tmp/unblockneteasemusic.log</b>，
 												跑几小时就能写满内存盘，排查完请及时关掉（脚本每次启动时会把日志截断到最近 8MB）。
 											</td>
@@ -374,7 +384,9 @@ function unm_cert_regen(){
 										<th>附加启动参数</th>
 											<td>
 												<input type="text" class="input" name="wyybin_extra" id="wyybin_extra" style="width: 300px" value="<% nvram_get_x("", "wyybin_extra"); %>" />
-												<br>留空即使用默认值。可用参数：<b>-e</b> 替换播放地址（固件已内置转发支持）、<b>-b</b> 强制最高音质、<b>-lv</b> 本地 VIP、<b>-sef</b> 解锁音效、<b>-ba</b> 屏蔽广告、<b>-sl N</b> 搜索数量(0-3)
+												<br>留空即使用默认值。可用参数：<b>-e</b> 替换播放地址（固件已内置转发支持）、<b>-b</b> 强制最高音质、<b>-sl N</b> 搜索数量(0-3)、<b>-insecure</b> TLS 口按明文监听。<br>
+												注意：<b>-bu/-ba/-lv/-sef/-wl</b> 已由上面的开关控制，写在这里会被忽略；
+												这些是无值参数，写成 <code>-wl=1</code> 或 <code>-wl true</code> 会让程序解析失败直接退出。
 											</td>
 										</tr>
 
@@ -402,8 +414,11 @@ function unm_cert_regen(){
 													<tr><th style="text-align:left;padding-right:12px"><b>server.key</b></th>
 														<td>服务器证书私钥</td></tr>
 												</table>
-												<br>这 4 个文件名固定，<b>有效期都是 3650 天</b>，四个齐全才算一套可用证书；
-												缺少任何一个都会按「目录不完整」处理并重新生成。<br>
+												<br>这 4 个文件名固定，<b>有效期都是 3650 天</b>。脚本按下面的顺序逐级判断，能少动就少动：<br>
+												<b>1.</b> 四个文件齐全、都没过期、且 server.crt 确实由这套 ca.key 签发 → <b>原样复用</b>，什么都不改；<br>
+												<b>2.</b> CA 还有效，只是 server.crt 缺失/过期/对不上 → <b>只重签 server.crt</b>，CA 不变，客户端不用重装；<br>
+												<b>3.</b> CA 本身缺失/过期/损坏 → <b>整套重签</b>，此时客户端要重新安装 ca.crt。<br>
+												重签前会把旧文件挪成 <b>*.bak-unm</b>，失败时自动还原，不会留下半套证书。<br>
 												<b>ca.srl</b> / <b>server.csr</b> / <b>ext.cnf</b> 是签发过程中的临时文件，可以删掉。<br>
 												<b>目录怎么来：</b>第一次启动服务时脚本会在该目录自动生成这四个文件；
 												也可以自己用 openssl 签一套放进目录，只要 <b>server.crt 由 ca.crt 对应的私钥签发</b>即可。
@@ -418,10 +433,11 @@ function unm_cert_regen(){
 												<input class="btn" type="button" value="按当前设置重新生成" onclick="unm_cert_regen()" />
 												<div id="unm_cert_result" style="margin-top: 8px; line-height: 1.6;"></div>
 												<br>
-												<b>复用规则：</b>证书一旦生成就<b>不再改变</b>，客户端装过一次 <b>ca.crt</b> 之后一直有效；<br>
-												只有四个文件齐全且都没过期才复用，服务器证书在到期前 30 天自动重签（<b>CA 不变，客户端无需重装</b>）；<br>
-												CA 本身也过期或损坏时才会整套重签，此时客户端需要重新安装 <b>ca.crt</b>。<br>
-												<b>注意：</b>改完目录请先点「应用」让服务重启，再点「检查证书」——检查读的是已保存的配置。
+												<b>两个按钮的作用：</b><br>
+												<b>检查证书</b>只读不写——按<b>已保存的</b>目录读文件、看是否过期、核对签发链，结果输出在下方，不会改任何文件。<br>
+												<b>按当前设置重新生成</b>会先确认，然后强制重签整套（<b>CA 会变</b>，装过旧 ca.crt 的客户端需要重新安装）；
+												失败时自动还原旧证书。<br>
+												<b>注意：</b>改完目录请先点「应用」让配置保存，再点「检查证书」——检查读的是已保存的配置。
 											</td>
 										</tr>
 

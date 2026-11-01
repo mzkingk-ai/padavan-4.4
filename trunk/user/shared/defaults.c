@@ -808,6 +808,32 @@ struct nvram_pair router_defaults[] = {
 	{ "wyy_staticnum_x", "0" },
 #endif
 
+#if defined(APP_WYYBIN)
+	/*UnblockNeteaseMusic (Go 版)*/
+	{ "wyybin_enable", "0" },
+	{ "wyybin_port", "" },
+	{ "wyybin_sslport", "" },
+	{ "wyybin_mode", "0" },
+	{ "wyybin_source", "" },
+	{ "wyybin_minscore", "" },
+	{ "wyybin_extra", "" },
+	{ "wyybin_cert", "" },
+	/*
+	 * 功能开关的默认值必须写在这里。
+	 * 不写的话 nvram 里根本没有这几个键：脚本的 unm_flag() 仍会把它们
+	 * 当成"开"（只有明确等于 "0" 才算关），而页面 nvram_match 拿到空值
+	 * 会显示成关闭 —— 于是出现"实际开着、页面显示关"。
+	 * -wl 默认关：它把每个请求的完整 JSON 打进 /tmp 内存盘，几小时就能写满。
+	 */
+	{ "wyybin_bu", "1" },
+	{ "wyybin_ba", "1" },
+	{ "wyybin_lv", "1" },
+	{ "wyybin_sef", "1" },
+	{ "wyybin_wl", "0" },
+	/* QQ 音源默认关闭：取址需要绿钻账号，未开通时一律返回 104003 */
+	{ "wyybin_qq_enable", "0" },
+#endif
+
 #if defined(APP_ZEROTIER)
 	/*Zerotier*/
 	{ "zerotier_enable", "0" },

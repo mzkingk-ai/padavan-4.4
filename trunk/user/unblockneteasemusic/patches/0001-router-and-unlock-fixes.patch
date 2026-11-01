@@ -2082,3 +2082,367 @@ diff -ruN a/proxy/proxy.go b/proxy/proxy.go
  }
  func printMemStats() {
  	var m runtime.MemStats
+diff -ruN a/cache/cache.go b/cache/cache.go
+--- a/cache/cache.go	2024-07-31 12:39:07.000000000 +0800
++++ b/cache/cache.go	2026-11-01 01:28:18.846517086 +0800
+@@ -1,35 +1,129 @@
+ package cache
+ 
+ import (
++	"container/list"
+ 	"fmt"
+-	"github.com/cnsilvan/UnblockNeteaseMusic/common"
+ 	"strconv"
+ 	"sync"
++
++	"github.com/cnsilvan/UnblockNeteaseMusic/common"
+ )
+ 
+-var cache sync.Map
++// 缓存在路由器上必须有上限：内存只有 128～256MB，sync.Map 只增不减，
++// 开着几个月就是无限增长（每首解过的歌一条，含完整直链和 md5）。
++//
++// 这里用「sync.Map + 双向链表」做成并发安全的 LRU：
++//   - 读命中时把节点挪到表头（需要写锁，用 sync.Mutex 保护链表）；
++//   - 写入时超限就从表尾淘汰。
++// 并发量只有一个家庭局域网，锁竞争可以忽略，换来的是明确的内存上界。
++const (
++	// maxSongs 是歌曲条数上限。按每条约 1KB 估，1500 条约 1.5MB。
++	maxSongs = 1500
++	// maxTagKeys 是平台 id 标签（GetPlatFormIdTag）的键数上限，
++	// 这类键只会因为新平台出现而增长，正常几个就够。
++	maxTagKeys = 64
++)
++
++type entry struct {
++	key   string
++	value interface{}
++}
++
++var (
++	cache sync.Map
++	mu    sync.Mutex
++	// lru 前端是最近使用过的，后端是最久没用的
++	lru   = list.New()
++	count int
++	// tagKeys 单独计数，平台标签不参与 LRU 淘汰（它们是常数级）
++	tagKeys int
++)
++
++func lruGet(k string) (interface{}, bool) {
++	v, ok := cache.Load(k)
++	if !ok {
++		return nil, false
++	}
++	mu.Lock()
++	if e, ok2 := v.(*list.Element); ok2 {
++		lru.MoveToFront(e)
++	}
++	mu.Unlock()
++	return v, true
++}
++
++// lruPut 写入并按需淘汰。tag 为 true 表示平台标签类键，只计数不淘汰。
++func lruPut(k string, value interface{}, tag bool) {
++	mu.Lock()
++	defer mu.Unlock()
++
++	if old, ok := cache.Load(k); ok {
++		// 已存在：原地更新，挪到表头
++		if e, ok2 := old.(*list.Element); ok2 {
++			e.Value.(*entry).value = value
++			lru.MoveToFront(e)
++			cache.Store(k, e)
++			return
++		}
++	}
++
++	e := lru.PushFront(&entry{key: k, value: value})
++	cache.Store(k, e)
++	count++
++
++	for lru.Len() > maxSongs {
++		be := lru.Back()
++		if be == nil {
++			break
++		}
++		lru.Remove(be)
++		cache.Delete(be.Value.(*entry).key)
++		count--
++	}
++}
+ 
+ func GetPlatFormIdTag(key common.PlatformIdTag) string {
+ 	var id int64 = 100001
+-	k := string(key)
+-	if value, ok := cache.LoadOrStore("PlatFormIdTagFor"+k, id+1); ok {
+-		id = value.(int64)
+-		cache.Store("PlatFormIdTagFor"+k, id+1)
++	k := "PlatFormIdTagFor" + string(key)
++	if v, ok := lruGet(k); ok {
++		if cur, ok2 := v.(int64); ok2 {
++			id = cur + 1
++		}
+ 	}
++	if tagKeys >= maxTagKeys {
++		// 键数已经封顶：不再新增，直接复用当前值，避免被刷爆
++		return strconv.FormatInt(id, 10)
++	}
++	lruPut(k, id, true)
++	return strconv.FormatInt(id-1, 10)
++}
+ 
+-	return strconv.FormatInt(id, 10)
++func songKey(key common.SearchMusic) string {
++	return fmt.Sprintf("%+v", key)
+ }
++
+ func PutSong(key common.SearchMusic, value *common.Song) {
+-	cache.Store(fmt.Sprintf("%+v", key), value)
++	lruPut(songKey(key), value, false)
+ }
++
+ func GetSong(key common.SearchMusic) (*common.Song, bool) {
+-	var song *common.Song
+-	if value, ok := cache.Load(fmt.Sprintf("%+v", key)); ok {
+-		song, ok = value.(*common.Song)
+-		return song, ok
++	if v, ok := lruGet(songKey(key)); ok {
++		if song, ok2 := v.(*common.Song); ok2 {
++			return song, true
++		}
+ 	}
+-	return song, false
++	return nil, false
+ }
++
+ func Delete(key common.SearchMusic) {
+-	cache.Delete(fmt.Sprintf("%+v", key))
++	mu.Lock()
++	defer mu.Unlock()
++	k := songKey(key)
++	if old, ok := cache.Load(k); ok {
++		if e, ok2 := old.(*list.Element); ok2 {
++			lru.Remove(e)
++			count--
++		}
++		cache.Delete(k)
++	}
+ }
+diff -ruN a/config/config.go b/config/config.go
+--- a/config/config.go	2026-11-01 01:40:23.217695074 +0800
++++ b/config/config.go	2026-11-01 01:30:48.740121956 +0800
+@@ -39,7 +39,20 @@
+ )
+ 
+ func ValidParams() bool {
+-	flag.Parse()
++	// 所有参数都注册在包级 var 里的默认 FlagSet（flag.CommandLine）上，
++	// 所以这里只能改它的行为，不能另建 NewFlagSet（那样里面一个参数都没有）。
++	// 默认的退出方式是 os.Exit(2)：参数写错时进程直接消失，页面上只能看到
++	// 「启动失败（进程已退出）」，真正的原因丢在无人接收的 stderr 里。
++	// 改成 ContinueOnError 后解析失败会返回 error，把它写进日志再按正常
++	// 流程返回 false，原因就能留在 /tmp/unblockneteasemusic.log。
++	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
++	flag.CommandLine.SetOutput(os.Stderr)
++	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
++		log.SetOutput(os.Stderr)
++		log.Println("--------------------Invalid Params--------------------")
++		log.Printf("启动失败：参数解析错误：%v\n", err)
++		return false
++	}
+ 	if flag.NArg() > 0 {
+ 		log.Println("--------------------Invalid Params------------------------")
+ 		log.Printf("Invalid params=%s, num=%d\n", flag.Args(), flag.NArg())
+diff -ruN a/provider/provider.go b/provider/provider.go
+--- a/provider/provider.go	2026-11-01 01:40:23.219053540 +0800
++++ b/provider/provider.go	2026-11-01 01:27:27.439656037 +0800
+@@ -181,16 +181,13 @@
+ 			searchSong["artistList"] = artists
+ 			searchSong["keyword"] = searchSong["name"].(string) + " " + searchSong["artistsName"].(string)
+ 			log.Println("search song:" + searchSong["keyword"].(string))
+-			// 先试 pyncmd：它不需要歌名匹配，直接拿网易 songId 换地址，
+-			// 拿回来的就是这首歌本身（实测 md5 与网易原址一致），
+-			// 没有「猜哪条是原唱」这一步，也就不存在翻唱风险。
+-			// 它覆盖不到的歌（实测《冬天的秘密》《成都》返回空）再走下面的换源搜索。
+-			songT = *findFromPyNcmd(searchSong, music)
+-			if len(songT.Url) > 0 {
+-				log.Println(utils.ToJson(songT))
+-				return songT
+-			}
+-			songT = *parseSongFn(searchSong, music)
++			// pyncmd 与换源搜索放进同一个并发窗口一起跑：
++			//   pyncmd 不需要歌名匹配，直接拿网易 songId 换地址，拿回来的就是
++			//   这首歌本身（实测 md5 与网易原址一致），不存在猜原唱/翻唱风险，
++			//   所以有结果就优先用它；但它走公网第三方接口，最坏要 3 次 × 8 秒
++			//   重试，排在前面串行跑会把整首解析拖到 25 秒以上。改为同时发出，
++			//   由 resolveSong 统一收口。
++			songT = *resolveSong(searchSong, music)
+ 			log.Println(utils.ToJson(songT))
+ 			return songT
+ 
+@@ -210,7 +207,7 @@
+ //   - 拿回来的码率/大小就是网易那份文件的真实值。
+ //
+ // key 里必须有 songId（由 Find 从 /api/song/detail 的响应里填进来）；
+-// 取不到就返回空，交给调用方走换源搜索。
++// 取不到就返回空，交给换源搜索兜底。
+ func findFromPyNcmd(key common.MapType, music common.SearchMusic) *common.Song {
+ 	empty := &common.Song{}
+ 	songId, ok := key["songId"].(string)
+@@ -237,45 +234,86 @@
+ 		return empty
+ 	}
+ 	re = calculateSongInfo(re)
+-	// 缓存键必须是「网易 songId」这一份，不能带平台前缀，
+-	// 否则下一次同一首歌再进来时命中不了缓存。
+-	cache.PutSong(common.SearchMusic{Id: songId, Quality: music.Quality}, re)
++	// pyncmd 拿到的是「同一首网易歌的直链」，缓存键不带平台前缀，
++	// 否则下一次同一首歌再进来时命中不了（GetSong 用的是原始 music）。
++	cache.PutSong(music, re)
+ 	return re
+ }
+ 
+-func parseSongFn(key common.MapType, music common.SearchMusic) *common.Song {
++// resolveSong 把 pyncmd 和所有换源放进同一个并发窗口，统一收口。
++//
++// 之前的写法是先串行跑 pyncmd、没结果再进 getSongFromAllSource 的 6 秒窗口，
++// 于是「pyncmd 慢」会直接叠在换源耗时之上：pyncmd 内部是最多 3 次 × 8 秒
++// 的重试，最坏能把一次播放请求拖到 25 秒以上，而换源那边其实几百毫秒就
++// 已经有结果了。现在两边同时发出：
++//   - pyncmd 有结果就用它（它给的是网易原曲，不用猜原唱）；
++//   - 否则用换源里 MatchScore 最高、同分取体积大的那条（与老逻辑一致）。
++func resolveSong(key common.MapType, music common.SearchMusic) *common.Song {
++	now := time.Now()
++	ch := make(chan *common.Song)
++	sum := 0
++
++	// pyncmd 走独立通道：它不参与 MatchScore 比较
++	go utils.PanicWrapper(func() {
++		ch <- findFromPyNcmd(key, music)
++	})
++	sum++
++
++	for _, p := range providers {
++		pt := p
++		go utils.PanicWrapper(func() {
++			ch <- calculateSongInfo(pt.ParseSong(buildSearchSong(key, music)))
++		})
++		sum++
++	}
++
++	songs := make([]*common.Song, 0, sum)
++	var py *common.Song
++	for {
++		select {
++		case song := <-ch:
++			sum--
++			if len(song.Url) > 0 {
++				if song.MatchScore >= 1 {
++					// pyncmd 给的是 1.0；换源的计算结果正常低于这个值，
++					// 万一撞上 1.0 也以下面的显式标记为准。
++					if py == nil {
++						py = song
++					}
++				} else {
++					songs = append(songs, song)
++				}
++			}
++			if sum <= 0 {
++				return pickSong(py, FilterByScore(songs), key, music)
++			}
++		case <-time.After(time.Second * 6):
++			// 超时后不再等剩下的音源，但已经到的结果仍然可用。
++			log.Println("resolve timeout, got:", time.Since(now))
++			return pickSong(py, FilterByScore(songs), key, music)
++		}
++	}
++}
++
++// pickSong 在 pyncmd 结果与换源结果之间做最终选择。
++func pickSong(py *common.Song, songs []*common.Song, key common.MapType, music common.SearchMusic) *common.Song {
++	if py != nil {
++		log.Println("resolved by pyncmd:", utils.ToJson(py))
++		return py
++	}
+ 	id := "0"
+-	searchSongName := key["name"].(string)
+-	searchSongName = strings.ToUpper(searchSongName)
+-	searchArtistsName := key["artistsName"].(string)
+-	searchArtistsName = strings.ToUpper(searchArtistsName)
+-	searchKeyword := key["keyword"].(string)
+ 	if songId, ok := key["songId"]; ok {
+ 		id = songId.(string)
+ 	}
+-	searchArtistList := key["artistList"].([]string)
+-	key["musicQuality"] = music.Quality
+-	var ch = make(chan *common.Song)
+-	now := time.Now()
+-	searchSong := common.SearchSong{
+-		Keyword: searchKeyword, Name: searchSongName,
+-		ArtistsName: searchArtistsName, Quality: music.Quality,
+-		OrderBy: common.MatchedScoreDesc, Limit: 1,
+-		ArtistList: searchArtistList,
+-	}
+-	songs := getSongFromAllSource(searchSong, ch)
+-	log.Println("consumed:", time.Since(now))
+ 	result := &common.Song{}
+ 	result.Size = 0
+ 	for _, song := range songs {
+-
+ 		if song.MatchScore > result.MatchScore {
+ 			result = song
+ 		} else if song.MatchScore == result.MatchScore && song.Size > result.Size {
+ 			result = song
+ 		}
+ 	}
+-
+ 	if id != "0" {
+ 		result.Id = id
+ 		if len(result.Url) > 0 {
+@@ -284,32 +322,21 @@
+ 		}
+ 	}
+ 	return result
+-
+ }
+ 
+-func getSongFromAllSource(key common.SearchSong, ch chan *common.Song) []*common.Song {
+-	var songs []*common.Song
+-	sum := 0
+-	for _, p := range providers {
+-		pt := p
+-		go utils.PanicWrapper(func() {
+-			ch <- calculateSongInfo(pt.ParseSong(key))
+-		})
+-		sum++
+-	}
+-	for {
+-		select {
+-		case song, _ := <-ch:
+-			if len(song.Url) > 0 {
+-				songs = append(songs, song)
+-			}
+-			sum--
+-			if sum <= 0 {
+-				return FilterByScore(songs)
+-			}
+-		case <-time.After(time.Second * 6):
+-			return FilterByScore(songs)
+-		}
++// buildSearchSong 由 Find 组装好的 key 生成换源搜索参数（大写的歌名/歌手）。
++func buildSearchSong(key common.MapType, music common.SearchMusic) common.SearchSong {
++	searchKeyword, _ := key["keyword"].(string)
++	artistList, _ := key["artistList"].([]string)
++	key["musicQuality"] = music.Quality
++	return common.SearchSong{
++		Keyword:     searchKeyword,
++		Name:        strings.ToUpper(key["name"].(string)),
++		ArtistsName: strings.ToUpper(key["artistsName"].(string)),
++		Quality:     music.Quality,
++		OrderBy:     common.MatchedScoreDesc,
++		Limit:       1,
++		ArtistList:  artistList,
+ 	}
+ }
+ 

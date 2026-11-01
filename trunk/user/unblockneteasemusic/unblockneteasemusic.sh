@@ -1,16 +1,21 @@
 #!/bin/sh
 # UnblockNeteaseMusic - 网易云音乐解锁服务
-# 基于 cnsilvan/UnblockNeteaseMusic (Go 版) 静态编译，配合 UPX 压缩
+# 基于 cnsilvan/UnblockNeteaseMusic (Go 版) 静态编译。
+# 构建约束只有一条：必须用 go1.22 编译（go1.23+ 的 lock_spinbit 在 MT7621 上
+# 让 futex 返回 -89，一启动就 SIGSEGV），UPX 压缩本身没有问题，见 Makefile。
 #
 # 两种用法（由页面的「转发模式」控制）：
 #   关闭  客户端手工把代理指向本机 5200(HTTP) / 5201(HTTPS)
-#   开启  改写 /etc/hosts + dnsmasq 劫持 music.163.com，客户端零配置，
-#         但需要把本脚本签发的 ca.crt 装到客户端作为受信任根证书
+#   开启  往 dnsmasq 用户配置写 address= 规则，把 music.163.com 等域名
+#         解析到本机，客户端零配置；但需要把本脚本签发的 ca.crt 装到
+#         客户端作为受信任根证书
 
 UNM_BIN="/usr/bin/UnblockNeteaseMusic"
 UNM_PID="/var/run/unblockneteasemusic.pid"
 UNM_LOG="/tmp/unblockneteasemusic.log"
 UNM_DIR="/etc/storage/unblockneteasemusic"
+# 证书相关文件的实际路径由 unm_resolve_cert_paths 按 wyybin_cert 计算，
+# 这里只给默认值兜底（命令分发前一定会先调用一次）。
 UNM_CSR="$UNM_DIR/server.csr"
 UNM_EXT="$UNM_DIR/ext.cnf"
 
@@ -23,7 +28,7 @@ unm_getip() {
 	echo "$ip"
 }
 
-# 停止服务：先按 pid 文件优雅退出，再用进程名兜底，最后清理 hosts/dns 劫持。
+# 停止服务：先按 pid 文件优雅退出，再用进程名兜底，最后清理 DNS 劫持。
 # 清理劫持是必须的，否则 failover 后域名仍指向本机、而服务已停，客户端会连不上。
 unm_stop() {
 	local pid p i
@@ -46,7 +51,6 @@ unm_stop() {
 		kill -9 "$p" 2>/dev/null
 	done
 
-	unm_unhook_hosts
 	unm_unhook_dns
 }
 
@@ -82,6 +86,10 @@ unm_resolve_cert_paths() {
 	UNM_CAKEY="$UNM_CERT_DIR/ca.key"
 	UNM_CERT="$UNM_CERT_DIR/server.crt"
 	UNM_KEY="$UNM_CERT_DIR/server.key"
+	# 临时文件也跟着证书目录走：默认目录只读（空间满/写保护）时，
+	# 把证书指到 U 盘依然能生成，不会因为写不进 dn.cnf 而失败。
+	UNM_CSR="$UNM_CERT_DIR/server.csr"
+	UNM_EXT="$UNM_CERT_DIR/ext.cnf"
 }
 
 # 已有证书「还能不能接着用」的统一判定。
@@ -117,9 +125,11 @@ unm_gen_ca() {
 	# 提供 v3_ca，在 OpenSSL 3.x 上会直接报
 	#   Error checking x509 extension section v3_ca
 	# 所以把 basicConstraints 写进独立配置，不再依赖系统配置。
-	local cfg="$UNM_DIR/dn.cnf"
+	local cfg="$UNM_CERT_DIR/dn.cnf"
 
-	cat >"$cfg" <<-EOF
+	# 写不进去必须立刻报错：否则后面 openssl 只会给出
+	# "Can't open ... for reading" 这种看不出根因的信息
+	if ! cat >"$cfg" <<-EOF
 		[req]
 		distinguished_name = dn
 		prompt = no
@@ -129,8 +139,13 @@ unm_gen_ca() {
 		keyUsage = critical,keyCertSign,cRLSign
 		subjectKeyIdentifier = hash
 	EOF
+	then
+		UNM_LAST_ERR="无法写入临时配置：$cfg（证书目录不可写？）"
+		logger -t "网易云解锁" "错误：$UNM_LAST_ERR"
+		rm -f "$cfg"
+		return 1
+	fi
 
-	mkdir -p "$(dirname "$UNM_CAKEY")" 2>/dev/null
 	openssl genrsa -out "$UNM_CAKEY" 2048 >>/dev/null 2>&1 || return 1
 	openssl req -x509 -new -nodes -key "$UNM_CAKEY" -sha256 -days 3650 \
 		-config "$cfg" -reqexts v3_ca \
@@ -141,17 +156,31 @@ unm_gen_ca() {
 }
 
 unm_gen_server_cert() {
-	local cfg="$UNM_DIR/ext.cnf"
+	local cfg="$UNM_CERT_DIR/ext.cnf"
+	local ip san
 
-	# 192.168.3.1 / 172.16.0.1 只是兜底：正常走 DNS 劫持时起作用的是那几个域名
-	cat >"$cfg" <<-EOF
+	# SAN 里的 IP 取当前 LAN 地址：客户端直接用 IP 连 5201 时需要它，
+	# 写死会让换过网段的固件在「以 IP 访问」时证书校验失败。
+	# 走域名访问时起作用的是 DNS: 那几条，IP 只是兜底。
+	ip=$(unm_getip)
+	[ -z "$ip" ] && ip=192.168.3.1
+	san="DNS:music.163.com,DNS:*.music.163.com,DNS:*.music.126.net,IP:$ip"
+	[ "$ip" != "172.16.0.1" ] && san="$san,IP:172.16.0.1"
+
+	# 写不进去要立刻报错，理由同 unm_gen_ca
+	if ! cat >"$cfg" <<-EOF
 		basicConstraints=CA:FALSE
 		keyUsage=digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
 		extendedKeyUsage=serverAuth
-		subjectAltName=DNS:music.163.com,DNS:*.music.163.com,DNS:*.music.126.net,IP:192.168.3.1,IP:172.16.0.1
+		subjectAltName=$san
 	EOF
+	then
+		UNM_LAST_ERR="无法写入临时配置：$cfg（证书目录不可写？）"
+		logger -t "网易云解锁" "错误：$UNM_LAST_ERR"
+		rm -f "$cfg"
+		return 1
+	fi
 
-	mkdir -p "$(dirname "$UNM_KEY")" 2>/dev/null
 	openssl genrsa -out "$UNM_KEY" 2048 >>/dev/null 2>&1 || return 1
 	openssl req -new -sha256 -key "$UNM_KEY" -out "$UNM_CSR" \
 		-subj "/C=CN/O=UnblockNeteaseMusic/CN=music.163.com" \
@@ -164,6 +193,47 @@ unm_gen_server_cert() {
 		-extfile "$cfg" -out "$UNM_CERT" >>/dev/null 2>&1
 	rm -f "$UNM_CSR" "$cfg"
 	[ -s "$UNM_CERT" ]
+}
+
+# ---------------------------------------------------------------------------
+# 证书备份/还原（只服务于 unm_check_cert ④ 分支与 regen 命令）
+#   重签是破坏性的：CA 一旦被覆盖，装过旧 ca.crt 的客户端就全要重装。
+#   所以动手之前先把整个证书目录里这几个文件挪成 .bak，
+#   成功才删掉 .bak，失败就原样放回去。
+# ---------------------------------------------------------------------------
+UNM_CERT_BAK_EXT=".bak-unm"
+
+unm_cert_backup() {
+	local f
+
+	for f in "$UNM_CA" "$UNM_CAKEY" "$UNM_CERT" "$UNM_KEY"; do
+		[ -f "$f" ] || continue
+		mv -f "$f" "$f$UNM_CERT_BAK_EXT" 2>/dev/null
+	done
+	# 旧的序列号一起挪走，保证新 CA 从干净状态开始
+	[ -f "$UNM_CERT_DIR/ca.srl" ] && mv -f "$UNM_CERT_DIR/ca.srl" "$UNM_CERT_DIR/ca.srl$UNM_CERT_BAK_EXT" 2>/dev/null
+	return 0
+}
+
+unm_cert_restore() {
+	local f
+
+	for f in "$UNM_CA" "$UNM_CAKEY" "$UNM_CERT" "$UNM_KEY" "$UNM_CERT_DIR/ca.srl"; do
+		[ -f "$f$UNM_CERT_BAK_EXT" ] || continue
+		# 新生成但不可用的半成品先删掉，不然 mv 会覆盖失败
+		rm -f "$f"
+		mv -f "$f$UNM_CERT_BAK_EXT" "$f" 2>/dev/null
+	done
+	return 0
+}
+
+unm_cert_backup_clear() {
+	local f
+
+	for f in "$UNM_CA" "$UNM_CAKEY" "$UNM_CERT" "$UNM_KEY" "$UNM_CERT_DIR/ca.srl"; do
+		rm -f "$f$UNM_CERT_BAK_EXT" 2>/dev/null
+	done
+	return 0
 }
 
 unm_check_cert() {
@@ -219,56 +289,29 @@ unm_check_cert() {
 	fi
 
 	# ---- ④ CA 也不可用：整套重签 ----
+	# 先把现有文件挪到 .bak 再动手：重签失败时放回去，
+	# 免得一次失败的尝试把客户端已经装好的 CA 彻底抹掉。
+	unm_cert_backup
 	logger -t "网易云解锁" "正在生成 CA（自签根证书，需安装到客户端）"
 	if ! unm_gen_ca; then
 		UNM_LAST_ERR="CA 生成失败（openssl 可能不支持当前 sha256）"
 		logger -t "网易云解锁" "警告：$UNM_LAST_ERR"
-		rm -f "$UNM_CA" "$UNM_CAKEY"
+		unm_cert_restore
 		return 1
 	fi
 
 	logger -t "网易云解锁" "正在签发服务器证书"
 	if unm_gen_server_cert; then
 		chmod 600 "$UNM_KEY" "$UNM_CAKEY" 2>/dev/null
+		unm_cert_backup_clear
 		logger -t "网易云解锁" "证书就绪：$UNM_CERT"
 		return 0
 	fi
 
 	UNM_LAST_ERR="证书签发失败（openssl 可能不支持当前 sha256/配置文件）"
 	logger -t "网易云解锁" "警告：$UNM_LAST_ERR，将以无证书模式启动（仅 HTTP 可用）"
-	rm -f "$UNM_CERT" "$UNM_KEY"
+	unm_cert_restore
 	return 1
-}
-
-# ---------------------------------------------------------------------------
-# /etc/hosts 转发
-#   上游 mode=1 会自行解析 domains 并写 /etc/hosts，依赖其备份/恢复逻辑；
-#   这里改由脚本托管，前缀统一打 mark，停止时按行清理，避免残留污染。
-# ---------------------------------------------------------------------------
-UNM_HOSTS_MARK="#unblockneteasemusic"
-
-unm_hook_hosts() {
-	local ip="$1"
-
-	unm_unhook_hosts
-	[ -z "$ip" ] && return 1
-	echo "$UNM_HOSTS_MARK" >>/etc/hosts
-	{
-		for d in $UNM_DOMAINS; do
-			echo "$ip $d $UNM_HOSTS_MARK"
-		done
-	} >>/etc/hosts
-	logger -t "网易云解锁" "已把网易云音乐域名指向 $ip"
-}
-
-unm_unhook_hosts() {
-	[ -f /etc/hosts ] || return 0
-	if grep -q "$UNM_HOSTS_MARK" /etc/hosts 2>/dev/null; then
-		grep -v "$UNM_HOSTS_MARK" /etc/hosts >/etc/hosts.unm
-		cat /etc/hosts.unm >/etc/hosts
-		rm -f /etc/hosts.unm
-		logger -t "网易云解锁" "已还原 /etc/hosts"
-	fi
 }
 
 # 客户端查询 music.163.com 时必须拿到本机 IP，才会去连本机 443 上的代理。
@@ -344,15 +387,15 @@ unm_filter_sources() {
 }
 
 unm_start() {
-	local port sslport source mode extra ip args pid
+	local port sslport source mode extra ip args pid ms
 
 	if [ ! -x "$UNM_BIN" ]; then
 		logger -t "网易云解锁" "错误：找不到可执行文件 $UNM_BIN"
 		return 1
 	fi
 
-	unm_stop
-
+	# 这里不再调 unm_stop：停旧进程由调用方（start/restart 分支）负责，
+	# 否则 restart 会连续停两次，每次都要等满 10 秒的优雅退出超时。
 	port=$(nvram get wyybin_port)
 	sslport=$(nvram get wyybin_sslport)
 	source=$(nvram get wyybin_source)
@@ -384,10 +427,11 @@ unm_start() {
 	[ -z "$source" ] && source=pyncmd
 
 	# 上游参数：-a 监听地址 -p HTTP 端口 -sp HTTPS 端口 -o 音源
-	#           -c/-k 证书 -m 运行模式(1=hosts) -l 日志文件
+	#           -c/-k 证书 -m 运行模式 -l 日志文件
 	#           -ms 最低匹配分（低于此分的搜索结果一律丢弃，宁缺勿错）
-	# 注意：mode 固定为 0（API/代理），hosts 改由本脚本托管，避免上游
-	#       自动重建 /etc/hosts 时与系统自身的主机名记录互相覆盖。
+	# 注意：mode 固定为 0（API/代理）。上游的 mode=1 会自己去改 /etc/hosts，
+	#       与系统自身的记录互相覆盖；域名劫持改由本脚本写 dnsmasq 配置完成，
+	#       只影响经 dnsmasq/SmartDNS 的查询，不会产生全局 hosts 副作用。
 	args="-a 0.0.0.0 -p $port -sp $sslport -o $source -m 0 -l $UNM_LOG"
 
 	# -wl 把每个请求和响应正文都打进日志，单条几 KB 到几十 KB，放开了写
@@ -427,7 +471,7 @@ unm_start() {
 
 	# 「-e」（endPoint 模式）不再使用：它把音源地址包装成
 	#   https://music.163.com/unblockmusic/<真实地址>
-	# 依赖客户端把 music.163.com 解析到本机，一旦 hosts 失效整条链路就断。
+	# 依赖客户端把 music.163.com 解析到本机，一旦劫持失效整条链路就断。
 	# 现在的做法是代理进程自己接住 /unblockmusic/ 请求并直接转发音源，
 	# 客户端拿到的是普通直链，链路不再有回环依赖。
 	# 若确实需要旧行为，在页面「额外参数」里填 -e 即可覆盖。
@@ -436,14 +480,31 @@ unm_start() {
 	# 功能开关：默认全部开启，页面上每个开关独立控制，互不影响。
 	#   -bu 屏蔽升级提示   -ba 去广告   -lv 本地伪 VIP
 	#   -sef 解锁音效      -wl 打印请求全文
-	# 只追加到 args 末尾，不参与「额外参数」的拼接，因此用户在额外参数
-	# 里写的同名字段依然排在最末，可以覆盖这里的默认值。
+	# 注意上游这几个是 Go 的 flag.Bool（无值开关），只能「传 = 开」、
+	# 「不传 = 关」，不存在「显式传一个关」的写法。所以页面开关关掉时
+	# 只是不追加这一项，不能在「额外参数」里再把它压成关。
 	# ------------------------------------------------------------------
 	args="$args $(unm_flag -bu wyybin_bu) $(unm_flag -ba wyybin_ba) $(unm_flag -lv wyybin_lv) $(unm_flag -sef wyybin_sef) $(unm_flag -wl wyybin_wl)"
 
-	# 额外参数由用户在页面里填写，优先级最高（可覆盖上面任何一项）
+	# 额外参数由用户在页面里填写。这里必须先筛一遍：上游 -bu/-ba/-lv/-sef/-wl
+	# 全都是 Go 的 flag.Bool（无值开关），有两个坑：
+	#   1) 写成 "-wl=1" 或 "-wl true" 会 flag.Parse 报错，进程直接退出；
+	#   2) 重复写两次 "-wl -wl" 也会 ParseError（bool flag 已经被包装成
+	#      "true" 形式，再次赋值即「多次设置」）。
+	# 所以剔除本次已由开关决定的那几个，只放行其它参数（-a/-p/-sp/-o/-m/-ms/
+	# -l/-c/-k/-insecure/-sl/-e/-b 以及页面没暴露但上游支持的项）。
+	# 同时把它们从 args 里先摘掉，避免与下方 unm_flag 产出的重复。
 	extra=$(nvram get wyybin_extra)
-	[ -n "$extra" ] && args="$args $extra"
+	if [ -n "$extra" ]; then
+		extra_clean=
+		for f in $extra; do
+			case "$f" in
+				-bu|-ba|-lv|-sef|-wl) : ;;	# 由页面开关决定，忽略
+				*) extra_clean="$extra_clean $f" ;;
+			esac
+		done
+		[ -n "$extra_clean" ] && args="$args$extra_clean"
+	fi
 
 	logger -t "网易云解锁" "正在启动：$UNM_BIN $args"
 	$UNM_BIN $args >>"$UNM_LOG" 2>&1 &
@@ -466,7 +527,6 @@ unm_start() {
 	# mode=1 为转发模式：把音乐域名指向本机，客户端无需任何设置
 	ip=$(unm_getip)
 	if [ "$mode" = "1" ] || [ "$mode" = "2" ]; then
-		unm_hook_hosts "$ip"
 		unm_hook_dns "$ip"
 	fi
 
@@ -475,6 +535,7 @@ unm_start() {
 
 case "$1" in
 start)
+	unm_stop
 	unm_start
 	;;
 stop)
@@ -504,10 +565,13 @@ cert)
 	fi
 	;;
 regen)
-	# 强制重签：删掉现有证书后按同样的流程重建。
+	# 强制重签：把现有证书挪到 .bak 后按同样的流程重建。
 	# 这是唯一会更换 CA 的入口，页面上的按钮带二次确认。
+	# 重建失败时 unm_check_cert ④ 会自己把 .bak 放回去，
+	# 所以「点了重新生成但失败了」不会让服务变成没有证书的状态。
 	unm_resolve_cert_paths
-	rm -f "$UNM_CERT" "$UNM_CA" "$UNM_CAKEY" "$UNM_KEY" "$UNM_CSR" "$UNM_EXT"
+	rm -f "$UNM_CSR" "$UNM_EXT"
+	unm_cert_backup
 	logger -t "网易云解锁" "按页面请求强制重新生成证书"
 	if unm_check_cert; then
 		echo "OK|dir=$UNM_CERT_DIR"
@@ -516,6 +580,9 @@ regen)
 		echo "FILES=$(ls -1 "$UNM_CERT_DIR" 2>/dev/null | tr '\n' ' ')"
 	else
 		echo "ERR|$UNM_LAST_ERR"
+		# 目录不可写/未挂载这类失败根本走不到 unm_check_cert ④，
+		# 备份还躺在目录里，这里补一次（已经是原样就什么都不做）
+		unm_cert_restore
 	fi
 	# 证书换了之后，正在跑的进程仍捏着旧证书，需要重启
 	if [ "$(pidof UnblockNeteaseMusic)" ] && [ "$(nvram get wyybin_enable)" = "1" ]; then

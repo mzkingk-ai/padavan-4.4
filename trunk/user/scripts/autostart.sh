@@ -66,17 +66,36 @@ logger -t "自动启动" "正在启动科学上网..."
 /usr/bin/shadowsocks.sh start
 fi
 
+# 网易云解锁必须排在 SmartDNS 之前：它的转发模式（wyybin_mode=1）是往
+# dnsmasq 用户配置写 address=/music.163.com/<本机>/ 这类劫持规则，而 SmartDNS
+# 只在启动那一刻读一遍那份文件（smartdns.sh 的 Get_sdns_conf）。反过来先起
+# SmartDNS 的话，这一轮写进去的规则不会被接管，要等下次重启才生效。
+if [ $(nvram get wyybin_enable) = 1 ] ; then
+logger -t "自动启动" "正在启动网易云音乐解锁..."
+/usr/bin/unblockneteasemusic.sh start
+fi
+
 if [ $(nvram get sdns_enable) = 1 ] ; then
    if [ -f "$smartdns_conf" ] ; then
        sed -i '/去广告/d' $smartdns_conf
        sed -i '/adbyby/d' $smartdns_conf
        sed -i '/no-resolv/d' "$dnsmasq_Conf"
-       sed -i '/server=127.0.0.1#'"$sdns_portd"'/d' "$dnsmasq_Conf"
+       sed -i '/server=127.0.0.1#'"$sdns_port"'/d' "$dnsmasq_Conf"
        sed -i '/port=0/d' "$dnsmasq_Conf"
        rm  -f "$smartdns_Ini"
    fi
 logger -t "自动启动" "正在启动 SmartDNS..."
 /usr/bin/smartdns.sh start
+# 兜底：万一本轮 wyybin 的劫持规则没能赶在 SmartDNS 启动前写入（例如
+# 证书生成耗时把顺序拉长，或 wyybin 上一次启动失败），就在 SmartDNS
+# 起来之后补一次重启，让它重新读一遍 dnsmasq.conf 里的 address 规则。
+# 只有两个功能都开着、且 wyybin 确实在跑时才做，避免无谓的重启。
+if [ $(nvram get wyybin_enable) = 1 ] && [ "$(nvram get wyybin_mode)" = "1" ] && \
+   pidof UnblockNeteaseMusic >/dev/null 2>&1 ; then
+    logger -t "自动启动" "重启 SmartDNS 以接管网易云解锁的地址劫持..."
+    /usr/bin/smartdns.sh stop >/dev/null 2>&1
+    /usr/bin/smartdns.sh start >/dev/null 2>&1
+fi
 fi
 
 if [ $(nvram get aliddns_enable) = 1 ] ; then
@@ -87,11 +106,6 @@ fi
 if [ $(nvram get ddnsto_enable) = 1 ] ; then
 logger -t "自动启动" "正在启动 ddnsto..."
 /usr/bin/ddnsto.sh start
-fi
-
-if [ $(nvram get wyybin_enable) = 1 ] ; then
-logger -t "自动启动" "正在启动网易云音乐解锁..."
-/usr/bin/unblockneteasemusic.sh start
 fi
 
 if [ $(nvram get aliyundrive_enable) = 1 ] ; then

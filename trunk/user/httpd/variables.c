@@ -987,19 +987,19 @@
 			{"wyybin_mode", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_extra", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_minscore", "", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_cert", "", NULL, EVM_RESTART_WYYBIN},
-			// wyybin_bu / wyybin_ba / wyybin_lv / wyybin_sef / wyybin_wl 都是开关型参数。
-			// 页面上的复选框未勾选时不会提交，draft 会据此补上默认值，
-			// 所以默认值必须是期望的初始状态，否则用户取消勾选后会被重置。
-			// -wl 默认关闭：它把每个请求的完整 JSON 打进日志，跑几小时就能
-			// 把 /tmp（内存盘）写满，需要时在页面上单独打开即可。
-			{"wyybin_bu", "1", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_ba", "1", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_lv", "1", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_sef", "1", NULL, EVM_RESTART_WYYBIN},
-			{"wyybin_wl", "0", NULL, EVM_RESTART_WYYBIN},
-			// QQ 音源默认关闭（取址需要绿钻账号，未开通时一律 104003）
-			{"wyybin_qq_enable", "0", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_cert", "", NULL, EVM_RESTART_WYYBIN|EVM_BLOCK_UNSAFE},
+			// 下面是开关型参数。注意第二列 longname 不是"默认值"：
+			// struct variable 的定义是 {name, longname, argv, event_mask}，
+			// 提交时只取 name 去 nvram_set()，longname 只在列表型控件里被
+			// atoi() 成输入框宽度（web_ex.c fieldLen = atoi(gv->longname)）。
+			// 所以真正的默认值必须写在 shared/defaults.c 的 APP_WYYBIN 段里，
+			// 这里统一留空，免得把输入框宽度改坏。
+			{"wyybin_bu", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_ba", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_lv", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_sef", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_wl", "", NULL, EVM_RESTART_WYYBIN},
+			{"wyybin_qq_enable", "", NULL, EVM_RESTART_WYYBIN},
 			{0,0,0,0}
 		};
 #endif
