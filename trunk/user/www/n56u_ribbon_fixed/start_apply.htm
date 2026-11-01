@@ -24,9 +24,19 @@ var getflag = '<% get_parameter("flag"); %>';
  * unm_cert_check / unm_cert_regen）。普通保存/应用时 action_mode 是
  * "Apply"/"Save" 或被 <form> 覆盖成空，这里什么都不输出，
  * POST 的 Content-Length 与响应长度仍然对得上。
+ *
+ * 「恢复默认配置」也走这里，但它的 action_mode 必须留空 ——
+ * update_variables_ex() 见到非空 action_mode 就会按「未知动作」处理，
+ * 把表单里的值照常写进 nvram，复位被立刻覆盖。所以复位请求改用
+ * wyybin_cert_exec 这个标记字段认出来，真正的动作放在
+ * wyybin_cert_action 里，由 wyybin_cert_hook 自己读取。
  */
 var unm_action_mode = '<% get_parameter("action_mode"); %>';
+var unm_cert_exec = '<% get_parameter("wyybin_cert_exec"); %>';
 if(unm_action_mode == ' CheckCertWYYBIN ' || unm_action_mode == ' RegenCertWYYBIN '){
+	<% wyybin_cert(); %>
+}
+else if(unm_cert_exec == '1'){
 	<% wyybin_cert(); %>
 }
 

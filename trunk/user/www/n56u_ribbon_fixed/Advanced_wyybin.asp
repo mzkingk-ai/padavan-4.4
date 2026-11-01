@@ -110,7 +110,10 @@ function fill_status(status_code){
  * 已保存且重启完毕；出错时延迟一下再冲刷，遮罩一定会被收掉。
  */
 function applyRule(){
-	setTimeout(function(){ unm_apply_post(); }, 100);
+	setTimeout(function(){
+		// 「证书目录」改过就先迁移证书，成功才真正保存
+		unm_cert_dir_prepare(null, function(){ unm_apply_post(); });
+	}, 100);
 }
 
 function unm_apply_post(){
@@ -140,9 +143,37 @@ function unm_apply_post(){
 		url:      '/start_apply.htm',
 		data:     postdata,
 		dataType: 'text',
-		timeout:  60000,
-		success:  function(){ unm_apply_done(); },
-		error:    function(){ setTimeout(unm_apply_done, 2000); }
+		timeout:  90000,
+		success:  function(){ unm_apply_restart(); },
+		error:    function(){ setTimeout(unm_apply_restart, 2000); }
+	});
+}
+
+/*
+ * 保存成功后再显式触发一次按需重启。
+ *
+ * 不能指望 start_apply.htm 的 action_mode=' Restart ' 把服务重启 ——
+ * update_variables_ex() 的 Restart 分支是「分组重启」：要先用 group_id
+ * 在变量表里找到同名项、且它的值 > 0，才置 restart_needed_bits。
+ * 本页没有分组控件，group_id 传空串，条件恒假，于是 notify_services()
+ * 直接返回：nvram 里的 wyybin_enable 改成了 0（页面上确实显示已关闭），
+ * 但进程从来没被停，状态栏永远停在「运行中」。
+ * 更迷惑的是它只在「只翻了总开关」时才复现：同一次提交里只要有别的
+ * 字段也变了，validate_asp_apply() 顺带置位就会掩盖这个问题。
+ *
+ * 所以这里在保存完成后走 update.cgi?output=wyybin_cert 并带上
+ * wyybin_cert_action=AppliedWYYBIN，由 web_ex.c 的 wyybin_cert_hook
+ * 直接调 restart_wyybin()。stop 要等旧进程优雅退出（最多 10 秒），
+ * 因此这个请求给了 90 秒超时；无论成功失败最后都要刷新页面。
+ */
+function unm_apply_restart(){
+	jQuery.ajax({
+		type:    'post',
+		url:     '/update.cgi',
+		data:    { output: 'wyybin_cert', wyybin_cert_action: 'AppliedWYYBIN' },
+		dataType:'text',
+		timeout: 90000,
+		complete: function(){ unm_apply_done(); }
 	});
 }
 
@@ -208,6 +239,117 @@ function unm_cert_regen(){
 	if (!confirm('将按当前「已保存」的路径重新生成整套证书。\n\nCA 会变，装过旧 ca.crt 的客户端需要重新安装。\n确定继续？'))
 		return;
 	unm_cert_post(' RegenCertWYYBIN ', '已重新生成：');
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * 恢复默认配置
+ * ---------------------------------------------------------------------------
+ * 这条不像 applyRule 那样"把表单原样提交"：它要的效果是把 nvram 恢复成
+ * 出厂值，而表单里显示的恰恰是用户改过的值。所以：
+ *
+ *   1. 先把除隐藏域以外的控件全部 disable —— 禁用的控件不进 POST 体，
+ *      而 validate_asp_apply() 只处理"这次请求带了值的"字段，
+ *      于是没有任何用户输入会被写回 nvram；
+ *   2. action_mode 留空：update_variables_ex() 只在 action_mode 非空时
+ *      才走"按动作处理"的分支，留空它什么都不做，不会覆盖复位结果；
+ *   3. 靠 wyybin_cert_exec=1 让 start_apply.htm 调起 wyybin_cert hook，
+ *      由它在服务端跑 unblockneteasemusic.sh resetdefault，
+ *      连 nvram 写默认值和按新配置重启进程一起做。
+ *
+ * 顺序很重要：disable 之后 Ajax 的字段收集逻辑（jQuery 的 val() 读不到
+ * 被禁用的控件）会漏掉它们，这正是我们要的；隐藏域 value 保持原样。
+ * 请求结束后一定要 location.reload()，否则页面上还停着旧值，
+ * 用户会以为没生效 —— 所以不用 unm_apply_done()（它也是 reload）。
+ */
+function unm_reset_defaults(){
+	if (!confirm('将把本页所有设置恢复为出厂默认值：\n\n· 关闭网易云解锁（总开关）\n· HTTP/HTTPS 端口回到 5200/5201\n· 转发模式关闭，音源与匹配阈值恢复默认\n· 功能开关恢复默认（-bu -ba -lv -sef 开，-wl 关）\n· QQ 音源关闭，附加参数与代理清空\n· 证书目录回到 /etc/storage/unblockneteasemusic\n· 证书缺失时用固件自带的那套补回（CA 不变，客户端无需重装）\n\n确定继续？此操作不可撤销。'))
+		return;
+
+	showLoading();
+
+	// 表单字段全部禁用：不参与 AJAX 收集，也就不会被写回 nvram
+	jQuery('#ruleForm').find('input,select,textarea').each(function(){
+		if (this.name == 'current_page' || this.name == 'next_page' ||
+		    this.name == 'sid_list' || this.name == 'group_id' ||
+		    this.name == 'action_mode' || this.name == 'action_script' ||
+		    this.name == 'wyybin_cert_exec' || this.name == 'wyybin_cert_action')
+			return;
+		this.disabled = true;
+	});
+
+	var postdata = {
+		current_page:        '/Advanced_wyybin.asp',
+		next_page:           '',
+		sid_list:            'WYYBIN;',
+		group_id:            '',
+		action_mode:         '',
+		action_script:       '',
+		wyybin_cert_exec:    '1',
+		wyybin_cert_action:  'ResetDefaultsWYYBIN'
+	};
+
+	jQuery.ajax({
+		type:     'post',
+		url:      '/start_apply.htm',
+		data:     postdata,
+		dataType: 'text',
+		timeout:  120000,
+		complete: function(){ location.href = 'Advanced_wyybin.asp'; }
+	});
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * 切换证书目录：先迁移证书，再保存配置
+ * ---------------------------------------------------------------------------
+ * 需求是"改到别处时，先看那个目录里有没有证书，没有就把默认目录那套拷
+ * 过去再改配置"。顺序不能反：
+ *   先保存路径 → notify_services 立刻 restart_wyybin → 脚本对着空目录
+ *   现场生成一套新 CA → 客户端装过的 ca.crt 当场失效。
+ * 所以这里分两步：
+ *   ① POST /update.cgi?output=wyybin_prepcert，只读 + 拷文件，不写 nvram；
+ *   ② 回调 0 才继续走 unm_apply_post() 保存。
+ * ② 的保存请求里已保存的旧 wyybin_cert 与新值比较，变了才真正落盘，
+ * 也就是"迁移成功之后才改配置"。
+ *
+ * 同一目录（或留空的默认目录）直接跳过 ①，少一次无意义的拷贝。
+ */
+function unm_cert_dir_prepare(next_dir, on_ok){
+	var cur = jQuery('#wyybin_cert').attr('data-saved') || '';
+	var now = jQuery.trim(jQuery('#wyybin_cert').val() || '');
+
+	// 没改路径：不需要迁移
+	if (now === cur) {
+		on_ok();
+		return;
+	}
+
+	$j('#unm_cert_result').html('<span style="color:#666">正在检查目标目录 ' +
+		unm_cert_escape(now || '/etc/storage/unblockneteasemusic') + ' 并迁移证书…</span>');
+
+	$j.ajax({
+		type: 'post',
+		url: '/update.cgi',
+		data: { output: 'wyybin_prepcert', cert_dir: now },
+		dataType: 'text',
+		timeout: 60000,
+		error: function(){
+			hideLoading();
+			unm_cert_show('ERR|请求失败，已取消保存（配置未改动），请确认登录尚未过期', false, '');
+		},
+		success: function(resp){
+			if (resp.indexOf('ERR|') === 0) {
+				// 迁移失败：中止保存，旧路径原样保留
+				hideLoading();
+				unm_cert_show(resp, false, '证书目录迁移失败，配置未改动：');
+				return;
+			}
+			// 打印拷贝结果，然后继续保存
+			unm_cert_show(resp, true, '证书目录迁移：');
+			on_ok();
+		}
+	});
 }
 
 </script>
@@ -453,11 +595,15 @@ function unm_cert_regen(){
 										<tr>
 										<th>证书目录</th>
 											<td>
-												<input type="text" class="input" name="wyybin_cert" id="wyybin_cert" style="width: 340px" value="<% nvram_get_x("", "wyybin_cert"); %>" placeholder="/etc/storage/unblockneteasemusic" />
+												<input type="text" class="input" name="wyybin_cert" id="wyybin_cert" style="width: 340px" value="<% nvram_get_x("", "wyybin_cert"); %>" data-saved="<% nvram_get_x("", "wyybin_cert"); %>" placeholder="/etc/storage/unblockneteasemusic" />
 												<br>留空即默认目录 <b>/etc/storage/unblockneteasemusic</b>。
 												它在 <b>/etc/storage</b> 持久化分区里，<b>重启、刷固件都不会丢</b>。<br>
 												想放到 U 盘就填如 <b>/media/UDISK/unm</b>（挂载点见「USB 应用 - 磁盘」页）。
-												只写相对路径时按相对默认目录处理。
+												只写相对路径时按相对默认目录处理。<br>
+												<b>改路径时自动迁移证书：</b>点「应用」后先检查目标目录，
+												<b>那里没有证书就会先把当前目录的证书整套拷过去</b>，拷贝成功才保存新路径；
+												拷贝失败则取消保存、配置保持原样。所以换目录<b>不会</b>让 CA 变掉，
+												客户端不需要重装。
 											</td>
 										</tr>
 
@@ -504,7 +650,13 @@ function unm_cert_regen(){
 										<tr>
 											<td colspan="4" style="border-top: 0 none;">
 												<br />
-												<center><input class="btn btn-primary" style="width: 219px" type="button" value="<#CTL_apply#>" onclick="applyRule()" /></center>
+												<center>
+													<input class="btn btn-primary" style="width: 219px" type="button" value="<#CTL_apply#>" onclick="applyRule()" />
+													&nbsp;&nbsp;
+													<input class="btn" style="width: 219px" type="button" value="恢复默认配置" onclick="unm_reset_defaults()" />
+													<br>
+													<span style="color: #888;">「恢复默认配置」会把本页所有设置（含证书目录）恢复出厂值，并按默认配置重启进程。点击后会再确认一次。</span>
+												</center>
 											</td>
 										</tr>
 </table>
@@ -517,6 +669,87 @@ function unm_cert_regen(){
 									<b>二、转发模式关闭：</b>手工把客户端代理指向本路由 —— 手机 Wi-Fi 里设「HTTP 代理」= 本路由 IP + 上面的 HTTP 端口；
 									电脑用 <b>Proxy SwitchyOmega</b> 等工具只把网易云音乐的域名转发过来。<br>
 									<b>提示：</b>只设置代理并不会解锁 VIP，它只恢复「因版权/地区灰掉」的曲目，不能替代会员。</p>
+									</div>
+
+									<div class="alert alert-info" style="margin: 10px;">
+									<p><b>在电脑上安装 ca.crt（解锁 HTTPS 必须做）</b></p>
+									<p>
+									网易云音乐的歌曲地址走 <b>HTTPS</b>，本机要解密并改写返回内容，就得给客户端一个它认的根证书。
+									没装 <b>ca.crt</b> 的表现有两种：客户端直接报「网络错误 / 加载失败」，或者能连上但播放仍是灰色的。<br>
+									<b>要装的只有一个文件：ca.crt</b>。另外三个 <b>绝对不要</b>发给别人、也不要往外拷：
+									<b>ca.key</b> 是根证书私钥，泄露等于任何人都能冒充任意网站；<b>server.key</b> 同理。
+									</p>
+									<p>
+									<b>怎么拿到 ca.crt：</b><br>
+									① 网页「系统管理 → 恢复/导出/上传设置」里用「下载」导出 <b>/etc/storage</b> 打包，从里面取出
+									<code>unblockneteasemusic/ca.crt</code>；<br>
+									② 或者在电脑上直接取（需要电脑能 SSH 到路由器，或用 WinSCP）：
+									<code>scp admin@192.168.3.1:/etc/storage/unblockneteasemusic/ca.crt .</code><br>
+									路径以本页「证书目录」里填的为准；改过目录就到新目录里取。
+									</p>
+
+									<p><b>一、Linux</b></p>
+									<p>
+									<b>1）Debian / Ubuntu / Deepin / UOS 等（apt 系）</b><br>
+									<code>sudo cp ca.crt /usr/local/share/ca-certificates/unblockneteasemusic.crt</code><br>
+									<code>sudo update-ca-certificates</code><br>
+									看到 <code>1 added, 0 removed</code> 即成功；用 <code>ls /etc/ssl/certs | grep unblock</code> 可核对。<br>
+									注意扩展名规则：<b>目录里用 .crt 后缀</b>，文件名随意；<code>update-ca-certificates</code> 只认 <code>.crt</code>。
+									</p>
+									<p>
+									<b>2）Fedora / CentOS / RHEL / openEuler 等（rpm 系）</b><br>
+									<code>sudo cp ca.crt /etc/pki/ca-trust/source/anchors/unblockneteasemusic.crt</code><br>
+									<code>sudo update-ca-trust extract</code>
+									</p>
+									<p>
+									<b>3）Arch / Manjaro</b><br>
+									<code>sudo cp ca.crt /etc/ca-certificates/trust-source/anchors/unblockneteasemusic.crt</code><br>
+									<code>sudo trust extract-compat</code>
+									</p>
+									<p>
+									<b>4）只对网易云客户端生效（不想动系统证书时）</b><br>
+									多数 Linux 客户端是 Electron/Chromium 内核，可用环境变量单独指定：
+									<code>SSL_CERT_FILE=/path/ca.crt netease-cloud-music</code><br>
+									若客户端不认这个变量，退回「3）系统级安装」，这是最稳的。
+									</p>
+									<p style="color: #888;">
+									卸载方法：删掉对应 anchors 目录里的 .crt 后再执行一次 update-ca-certificates（或 update-ca-trust extract）。
+									</p>
+
+									<p><b>二、Windows</b></p>
+									<p>
+									<b>图形界面（推荐，Win10 / Win11）</b><br>
+									① 把 <code>ca.crt</code> 拷到本机，双击打开 → <b>安装证书</b>；<br>
+									② 存储位置选 <b>「当前用户」</b>（不需要管理员）或「本地计算机」（需要管理员，对所有用户生效）；<br>
+									③ 下一步选 <b>「将所有的证书都放入下列存储」</b> → 浏览 → 选 <b>「受信任的根证书颁发机构」</b>；<br>
+									④ 完成。弹出「安全性警告」时点 <b>是</b>（提示"无法验证是不是来自受信任的证书颁发机构"是正常的）；<br>
+									⑤ 关闭浏览器和网易云客户端，重新打开才生效。
+									</p>
+									<p>
+									<b>命令行（管理员 CMD 或 PowerShell）</b><br>
+									当前用户：<code>certutil -addstore -user Root ca.crt</code><br>
+									本地计算机：<code>certutil -addstore Root ca.crt</code>（需管理员）<br>
+									看到 <code>Root "受信任的根证书颁发机构"</code> 和 <code>签名与公钥匹配</code> 字样即成功。
+									</p>
+									<p>
+									<b>核对是否装上了</b><br>
+									运行 <code>certmgr.msc</code> → 受信任的根证书颁发机构 → 证书，找到
+									<b>UnblockNeteaseMusic Root CA</b> 这一条即可（CN 以本页「检查证书」输出为准）。
+									</p>
+									<p>
+									<b>卸载</b>：同上位置双击 → 删除；或管理员执行 <code>certutil -delstore -user Root "UnblockNeteaseMusic Root CA"</code>。
+									</p>
+
+									<p><b>三、常见问题</b></p>
+									<p>
+									<b>装完还是不行？</b>① 关掉浏览器/客户端再开，很多程序只在启动时读证书；
+									② 用「检查证书」确认目录里确实是那套证书，并且没被「重新生成」换过 CA；
+									③ 客户端开了自己的代理或 VPN 时，流量没经过本机，也会失败。<br>
+									<b>证书会不会过期？</b>本机生成的根证书有效期 10 年。只要不点「按当前设置重新生成」，
+									CA 就不会变；改证书目录也不会变（只会整套拷贝过去），因此客户端装一次就够。<br>
+									<b>换机 / 刷固件后要重装吗？</b>只要不重新生成 CA、且 <b>/etc/storage</b> 不丢，就不用。
+									恢复出厂设置会清空 <b>/etc/storage</b>，此时 CA 会重新生成，需要重装 <b>ca.crt</b>。
+									</p>
 									</div>
 
 								</div>
