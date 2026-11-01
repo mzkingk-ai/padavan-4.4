@@ -1,21 +1,17 @@
-# UnblockNeteaseMusic (Go 版, cnsilvan fork)
-#   - 上游只发布到 0.2.13 (2021)，之后的功能都以源码形式存在 master 分支，
-#     故这里从固定 commit 的源码包编译，不再下载 zip 资产。
-#   - go.mod 声明 go 1.16，依赖仅 mapstructure + x/text，可离线缓存。
+# UnblockNeteaseMusic (Go 版, mzkingk-ai fork)
+#   - 上游 cnsilvan 只发布到 0.2.13 (2021)，之后的功能都以源码形式存在 master 分支。
+#   - 早期做法是下载固定 commit 的 tar.gz 再叠加一串本地补丁。那个模式的问题是：
+#     补丁越叠越多、每次改代码都要重新生成 diff、补丁打崩了还只能靠 .rej 事后兜底。
+#   - 现在改为直接从 fork 拉最新源码编译，所有代码改动都在上游仓库里维护，
+#     本目录只保留 padavan 特有的适配（守护脚本、Go 版本约束、交叉编译参数）。
+#
+# 换源码分支/提交：改 UNM_REPO / UNM_REF 即可。
+#   UNM_REF 留空 = 跟 master 最新；填 commit 或 tag = 钉住版本，便于复现旧固件。
 
 UNM_VER := 0.2.13
-UNM_COMMIT := 91afd9361e8bb5308c3a6f8bba39a577eaba76be
-UNM_SRC := UnblockNeteaseMusic-$(UNM_COMMIT)
-UNM_URL := https://github.com/cnsilvan/UnblockNeteaseMusic/archive/$(UNM_COMMIT).tar.gz
-
-# 本地适配补丁（按文件名顺序应用）：
-#   0001 路由分发重写 + 解锁链路修复（音质选档、翻唱阈值、证书失败不退出、eapi 容错、
-#        provider 初始化顺序、HostDomain 兜底等），详见 README.md
-#   0002 多音源稳定性（并发写 map 崩溃、pyncmd 代理与超时、定时器重置），详见 README.md
-# 两个补丁按顺序叠加：0002 是基于 0001 应用后的文件做的 diff，单独打会失败。
-# 源码目录永远是「干净解包 + 打这两个补丁」，补丁一旦有变重新解包即可，
-# 不要在解包目录里裸改代码。
-UNM_PATCHES := $(sort $(wildcard $(CURDIR)/patches/*.patch))
+UNM_REPO := https://github.com/mzkingk-ai/UnblockNeteaseMusic.git
+UNM_REF :=
+UNM_SRC := UnblockNeteaseMusic-src
 
 THISDIR = $(shell pwd)
 
@@ -28,58 +24,32 @@ THISDIR = $(shell pwd)
 coreclean:
 	@rm -f $(THISDIR)/core.* $(THISDIR)/bin/*.tmp $(THISDIR)/bin/*.raw
 
-all: coreclean download_test extract_test patch_test build
+all: coreclean fetch_src build
 
-download_test:
-	( if [ ! -f $(THISDIR)/$(UNM_SRC).tar.gz ]; then \
-		echo "Downloading UnblockNeteaseMusic $(UNM_VER) ($(UNM_COMMIT))" ; \
-		curl --create-dirs -fL $(UNM_URL) -o $(THISDIR)/$(UNM_SRC).tar.gz ; \
-	fi )
-
-extract_test:
-	( if [ ! -d $(THISDIR)/$(UNM_SRC) ]; then \
-		mkdir -p $(THISDIR)/$(UNM_SRC) ; \
-		tar zxf $(THISDIR)/$(UNM_SRC).tar.gz -C $(THISDIR)/$(UNM_SRC) --strip-components=1 ; \
-	fi )
-
-# 打补丁。用 --dry-run 探一次：能干净打到 → 说明还是未打过补丁的原始解包，
-# 正式应用；打不上 → 认为已经打过（或已被改动），跳过，
-# 这样 make 重复执行不会报错，也不会把补丁打第二遍。
+# 拉取或更新源码。
 #
-# 但「打不上」不等于「已经打过」：补丁本身写坏、上游换了源码，都会走到同一分支，
-# 于是坏补丁被静默跳过、编出不含修复的二进制，而日志里看不出任何异常
-# （2026-11-01 就是这么发出过一版）。所以用 .rej 把两种情况分开：
-#   - 解包目录里存在 .rej → 之前某个补丁真的打崩了，直接 fail
-#   - 补丁打不上且没留下 .rej → 才算「已经打过」，跳过
-# 注意：用 find 数个数，配合 [ -gt 0 ] 判断。不要写成
-#   if ! find DIR -name '*.rej' -print -quit | grep -q .
-# 本机 dash 上「! + 管道 + grep -q」组合会判反（有 .rej 也走 else 分支），
-# 换成 [ "$n" -gt 0 ] 就没这个坑，结果也更好读。
-UNM_REJ_COUNT = $$(find $(THISDIR)/$(UNM_SRC) -name '*.rej' 2>/dev/null | wc -l)
-
-patch_test:
+# 有意做成「已经存在就原地 fetch + 重置」，而不是每次都删掉重来：
+# 全量克隆一次约几十 MB，而固件构建链会在多个 stage 里多次调用本包，
+# 每次重新克隆会把构建时间拖到不可接受。
+#
+# fetch 失败（断网、GitHub 抽风）时如果本地已有旧源码就直接用，不中断整个
+# 固件构建——固件构建链条很长，不该因为一个可选组件拉不到就全盘失败。
+fetch_src:
 	@set -e ; \
-	if [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
-		echo "ERROR: $(UNM_SRC) 里有未处理的 .rej，补丁打崩了。删掉该目录重编" ; \
-		find $(THISDIR)/$(UNM_SRC) -name '*.rej' ; \
-		exit 1 ; \
-	fi ; \
-	for p in $(UNM_PATCHES) ; do \
-		if patch -p1 -d $(THISDIR)/$(UNM_SRC) --dry-run -s -f -i $$p >/dev/null 2>&1 ; then \
-			echo "Applying patch $$(basename $$p)" ; \
-			patch -p1 -d $(THISDIR)/$(UNM_SRC) -s -i $$p ; \
-			if [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
-				echo "ERROR: patch $$(basename $$p) 留下了 .rej，补丁打崩了" ; \
-				find $(THISDIR)/$(UNM_SRC) -name '*.rej' ; \
-				exit 1 ; \
-			fi ; \
-		elif [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
-			echo "ERROR: patch $$(basename $$p) 有 hunk 打不上，见上面 .rej 日志" ; \
-			exit 1 ; \
+	if [ -d $(THISDIR)/$(UNM_SRC)/.git ] ; then \
+		cd $(THISDIR)/$(UNM_SRC) ; \
+		if git fetch --depth=1 origin $(if $(UNM_REF),$(UNM_REF),master) 2>/dev/null ; then \
+			git reset --hard FETCH_HEAD >/dev/null ; \
+			echo "UnblockNeteaseMusic: updated to $$(git rev-parse --short HEAD)" ; \
 		else \
-			echo "Patch $$(basename $$p) already applied, skip" ; \
+			echo "WARNING: 拉取失败，沿用本地已缓存源码 $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" ; \
 		fi ; \
-	done
+	else \
+		echo "Cloning UnblockNeteaseMusic from $(UNM_REPO)" ; \
+		rm -rf $(THISDIR)/$(UNM_SRC) ; \
+		git clone --depth=1 $(if $(UNM_REF),--branch $(UNM_REF),) \
+			$(UNM_REPO) $(THISDIR)/$(UNM_SRC) ; \
+	fi
 
 # 三条硬约束（都是真机试出来的，别改回去）：
 #
@@ -119,7 +89,7 @@ build:
 		fi; \
 		GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0 \
 		go build -trimpath \
-			-ldflags "-s -w -buildid= -X github.com/cnsilvan/UnblockNeteaseMusic/version.Version=$(UNM_VER) -X github.com/cnsilvan/UnblockNeteaseMusic/version.GitCommit=$(UNM_COMMIT)" \
+			-ldflags "-s -w -buildid= -X github.com/cnsilvan/UnblockNeteaseMusic/version.Version=$(UNM_VER) -X github.com/cnsilvan/UnblockNeteaseMusic/version.GitCommit=$$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
 			-o $(THISDIR)/bin/UnblockNeteaseMusic . ; \
 	)
 	@echo "built: $$(stat -c %s $(THISDIR)/bin/UnblockNeteaseMusic) bytes"

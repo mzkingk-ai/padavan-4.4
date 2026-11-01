@@ -7,37 +7,53 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游仓库 | `cnsilvan/UnblockNeteaseMusic` |
-| 固定 commit | `91afd9361e8bb5308c3a6f8bba39a577eaba76be`（2024-07-31） |
-| 版本号 | `0.2.13`（上游 release 只到 2021-11-04 的 0.2.13，之后只有 master 源码） |
-| 取源方式 | `https://github.com/cnsilvan/UnblockNeteaseMusic/archive/<commit>.tar.gz` |
+| 源码仓库 | `mzkingk-ai/UnblockNeteaseMusic`（从 `cnsilvan/UnblockNeteaseMusic` fork） |
+| 取源方式 | `git clone --depth=1` 拉取最新 `master`，或 `UNM_REF=<commit>` 钉住版本 |
+| 版本号 | `0.2.13`（上游 release 只到 2021-11-04，之后只有 master 源码） |
 | 依赖 | 仅 `mapstructure v1.4.2` + `golang.org/x/text v0.3.3`，`go.mod` 声明 go 1.16 |
 
 上游 JS 版（`UnblockNeteaseMusic/server`）需要 Node.js，而 Padavan 树里没有任何 node 包，
 体积也不适合 128MB 设备，因此选 Go 版。
 
+### 为什么改成直接拉 fork
+
+最早的写法是「下载固定 commit 的 tar.gz + 叠加一串本地补丁」。随着改动变多，这个模式的问题
+越来越明显：补丁越叠越多、每次改代码都要重新生成 diff、补丁打崩了只能靠 `.rej` 事后兜底，
+而且补丁顺序稍错就会静默编出不含修复的二进制。
+
+现在所有代码改动都在 fork 仓库里维护，**本目录只剩 padavan 特有的适配**：
+
+- 守护脚本 `unblockneteasemusic.sh`（上游没有这个文件）
+- Makefile 里的 Go 版本约束与交叉编译参数
+- 固件集成（`romfs`、`Config.in`、页面）
+
 ## 目录结构
 
 ```
 trunk/user/unblockneteasemusic/
-├── Makefile                      构建规则（解包 → 打补丁 → 交叉编译 → romfs）
-├── patches/
-│   ├── 0001-router-and-unlock-fixes.patch   路由与解锁链路修复
-│   └── 0002-multi-source-fixes.patch        多音源稳定性（并发/代理/超时）
+├── Makefile                      构建规则（拉源码 → 交叉编译 → romfs）
 ├── unblockneteasemusic.sh        运行时控制脚本（start/stop/restart/status/watch/cert/regen）
-├── UnblockNeteaseMusic-<commit>.tar.gz      上游源码包（git 忽略，缺失时自动下载）
-├── UnblockNeteaseMusic-<commit>/            解包目录 = 上游 + 上述两个补丁（git 忽略）
-└── bin/UnblockNeteaseMusic                  编译产物（git 忽略，不进版本库）
+├── UnblockNeteaseMusic-src/      git clone 下来的源码（git 忽略）
+└── bin/UnblockNeteaseMusic       编译产物（git 忽略，不进版本库）
 ```
 
-**源码目录永远是「干净解包 + 打两个补丁」。** 要改代码请改补丁，不要直接改解包目录，
-否则 `make clean` 一次就全丢了。
+**要改代码就去改 fork 仓库，不要改 `UnblockNeteaseMusic-src/`。** 那是 git 工作副本，
+每次 `make` 都会 `git reset --hard` 到最新提交，改了会丢。
 
 ## 编译
 
 ```sh
 cd trunk/user/unblockneteasemusic
-make            # 解包 → 打补丁 → 交叉编译，产物在 bin/
+make            # 拉最新源码 → 交叉编译，产物在 bin/
+```
+
+首次是完整克隆，之后每次只做 `fetch --depth=1` 增量更新。断网时如果本地已有源码就直接用
+旧版本编译，不会中断整个固件构建。
+
+需要钉住某个版本（复现旧固件）：
+
+```sh
+make UNM_REF=<commit>
 ```
 
 ### 两条硬约束（真机试出来的，别改回去）
@@ -130,7 +146,7 @@ nvram 变量：默认值写在 `trunk/user/shared/defaults.c` 的 `APP_WYYBIN` �
 - 证书查询/重签走 `update.cgi?output=wyybin_cert` → `wyybin_cert_hook()`
   → `unblockneteasemusic.sh cert|regen`，返回 `OK|/END=/SUBJ=/FILES=` 或 `ERR|`
 
-## 补丁 0002 改了什么（多源与稳定性，2026-11-01）
+## 多源与稳定性改动（2026-11-01）
 
 切到多音源（`pyncmd:kuwo:kugou:migu`）后暴露的一批问题，逐条如下。
 
@@ -252,7 +268,7 @@ malformed HTTP response "\x00\x00\x12\x04\x00\x00..."
 | 并发 10 路 | **0 次** `fatal error` / `concurrent map` / `panic`，进程存活 |
 | 定时器精度 | `resolve timeout, got: 20.0102779s`（窗口 20s，循环外建定时器） |
 
-## 补丁 0001 改了什么
+## 路由与解锁链路改动
 
 ### 路由分发（`proxy/proxy.go`，改动最大）
 

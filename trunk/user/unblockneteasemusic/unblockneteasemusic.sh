@@ -11,6 +11,11 @@
 #         客户端作为受信任根证书
 
 UNM_BIN="/usr/bin/UnblockNeteaseMusic"
+# /proc/<pid>/comm 被内核截断到 15 字节。旧二进制叫 UnblockNeteaseMusic（19 字节）
+# 时被截成 UnblockNeteaseM，pidof 按原名仍能匹配；但 U 盘那份文件名多了 .new，
+# 截断后变成 UnblockNeteaseM.new，pidof 用原名就找不到它，于是 stop/status/watch
+# 全部失灵、cron 守护还会重复拉起抢端口。改成直接匹配 /proc 的命令行。
+UNM_PROG="UnblockNeteaseMusic"
 UNM_PID="/var/run/unblockneteasemusic.pid"
 UNM_LOG="/tmp/unblockneteasemusic.log"
 # 守护冷却时间戳。放 /tmp 是故意的：重启后清零，第一次 cron 就能正常拉起
@@ -61,6 +66,20 @@ unm_cron_del() {
 	fi
 }
 
+# 列出所有 UNM 进程：优先命令行匹配（不受 comm 15 字节截断影响），
+# 再并上 pidof 的结果（覆盖 UPX 解包等异常情形）。输出已排序去重。
+unm_pids() {
+	{
+		for d in /proc/[0-9]*; do
+			[ -r "$d/cmdline" ] || continue
+			if tr '\0' ' ' <"$d/cmdline" 2>/dev/null | grep -q "$UNM_PROG"; then
+				basename "$d"
+			fi
+		done
+		pidof "$UNM_PROG" 2>/dev/null | tr ' ' '\n'
+	} | grep -v '^$' | sort -u
+}
+
 # 停止服务：先按 pid 文件优雅退出，再用进程名兜底，最后清理 DNS 劫持。
 # 清理劫持是必须的，否则 failover 后域名仍指向本机、而服务已停，客户端会连不上。
 unm_stop() {
@@ -79,8 +98,8 @@ unm_stop() {
 	fi
 	rm -f "$UNM_PID"
 
-	# 兜底：按进程名清理（UPX 解包后进程名仍为 UnblockNeteaseMusic）
-	for p in $(pidof UnblockNeteaseMusic 2>/dev/null); do
+	# 兜底：按命令行清理（见上面的 UNM_PROG 说明）
+	for p in $(unm_pids); do
 		kill -9 "$p" 2>/dev/null
 	done
 
@@ -371,6 +390,9 @@ unm_hook_dns() {
 		echo "address=/music.163.com/$ip $UNM_DNS_MARK"
 		echo "address=/interface.music.163.com/$ip $UNM_DNS_MARK"
 		echo "address=/interface3.music.163.com/$ip $UNM_DNS_MARK"
+		# 新版 PC 客户端用 interfacepc，不劫持它，电脑端的播放地址请求
+		# 连不到本机，全部直连网易拿试听片段。
+		echo "address=/interfacepc.music.163.com/$ip $UNM_DNS_MARK"
 	} >>"$UNM_DNSMASQ_CONF"
 	logger -t "网易云解锁" "已写入 DNS 劫持规则（$ip），重启 DNS 服务后生效"
 	return 0
@@ -523,8 +545,22 @@ unm_start() {
 	# 上游参数：-a 监听地址 -p HTTP 端口 -sp HTTPS 端口 -o 音源
 	#           -c/-k 证书 -m 运行模式 -l 日志文件
 	#           -ms 最低匹配分（低于此分的搜索结果一律丢弃，宁缺勿错）
+	#           -mtls MITM 监听地址 -mk MITM CA 私钥路径
 	# -m 固定传 0：见上面的说明，上游的 hosts 劫持一律关掉，劫持由本脚本负责。
 	args="-a 0.0.0.0 -p $port -sp $sslport -o $source -m 0 -l $UNM_LOG"
+
+	# MITM：客户端把网易域名解析回本机时，CONNECT 落进 $port，隧道里是 TLS。
+	# 不启用 MITM 的话这条隧道只能原样透传 —— 播放地址接口的响应不会被改写，
+	# 客户端表现就是「代理连上了但 VIP 歌还是试听」，PC 端甚至像断网一样
+	# （旧代码在 mips 上 tls.Dial 回环自己会报 packet length too long 直接掐断）。
+	# 监听 127.0.0.1 而不是 0.0.0.0：只有本机回环能连到，不对外暴露。
+	#
+	# 端口必须与 $sslport 错开：-sp 自己在 0.0.0.0:$sslport 上监 TLS，
+	# MITM 再绑 127.0.0.1:$sslport 会撞车（实测 "bind: address already
+	# in use"，且下游 startTlsServer 的 fatal 会把整个进程带走）。
+	# 用 sslport+1 作为 MITM 端口。
+	mitm_port=$((sslport + 1))
+	args="$args -mtls 127.0.0.1:$mitm_port -mk ${UNM_DIR:-/usr/bin}/mitm-ca.key"
 
 	# pyncmd 的代理路由（见 config.resolveProxy）：
 	#   页面留空 → 程序自己探测本机 7890/1080 等端口，探到就走代理（6s 超时），
@@ -653,7 +689,7 @@ restart)
 	unm_start
 	;;
 status)
-	if pidof UnblockNeteaseMusic >/dev/null 2>&1; then
+	if [ -n "$(unm_pids)" ]; then
 		echo "running"
 	else
 		echo "stopped"
@@ -680,7 +716,7 @@ watch)
 	if [ "$(nvram get wyybin_enable)" != "1" ]; then
 		exit 0
 	fi
-	if pidof UnblockNeteaseMusic >/dev/null 2>&1; then
+	if [ -n "$(unm_pids)" ]; then
 		exit 0
 	fi
 	if [ -f "$UNM_WATCH_STAMP" ]; then
@@ -730,7 +766,7 @@ regen)
 		unm_cert_restore
 	fi
 	# 证书换了之后，正在跑的进程仍捏着旧证书，需要重启
-	if [ "$(pidof UnblockNeteaseMusic)" ] && [ "$(nvram get wyybin_enable)" = "1" ]; then
+	if [ -n "$(unm_pids)" ] && [ "$(nvram get wyybin_enable)" = "1" ]; then
 		unm_stop
 		unm_start >/dev/null 2>&1
 	fi
