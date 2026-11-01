@@ -228,6 +228,26 @@ func_fill()
 	# create https dir
 	[ ! -d "$dir_httpssl" ] && mkdir -p -m 700 "$dir_httpssl"
 
+	# 网易云解锁：出厂默认证书套装
+	# 固件里带着一套证书，放在只读的 /etc/unm-cert-default（romfs），
+	# 但真正的证书目录 /etc/storage/unblockneteasemusic 属于本脚本管理的
+	# 持久化分区 —— 直接把文件放进 romfs 的 /etc/storage 会在 load 时
+	# 被备份包整个盖掉。所以在这里、在「目录还不存在」时从出厂套装拷一次：
+	#   · 目录已存在（用户装过/改过证书）→ 一个字节都不动；
+	#   · 这样客户端装过的 ca.crt 在刷固件后依然有效，
+	#     而不是每次升级都换一套新 CA 逼所有人重装。
+	dir_wyybin="$dir_storage/unblockneteasemusic"
+	if [ ! -d "$dir_wyybin" ] && [ -d "/etc/unm-cert-default" ]; then
+		if mkdir -p -m 700 "$dir_wyybin" 2>/dev/null; then
+			for f in ca.crt ca.key server.crt server.key; do
+				[ -f "/etc/unm-cert-default/$f" ] && cp -f "/etc/unm-cert-default/$f" "$dir_wyybin/$f" 2>/dev/null
+			done
+			chmod 600 "$dir_wyybin/ca.key" "$dir_wyybin/server.key" 2>/dev/null
+			chmod 644 "$dir_wyybin/ca.crt" "$dir_wyybin/server.crt" 2>/dev/null
+			logger -t "Storage" "已从出厂套装初始化网易云解锁证书：$dir_wyybin"
+		fi
+	fi
+
 	# create chnroute.txt
 	if [ ! -d "$dir_chnroute" ] ; then
 		if [ -f "$chnroute_file" ]; then
