@@ -13,6 +13,8 @@
 UNM_BIN="/usr/bin/UnblockNeteaseMusic"
 UNM_PID="/var/run/unblockneteasemusic.pid"
 UNM_LOG="/tmp/unblockneteasemusic.log"
+# 守护冷却时间戳。放 /tmp 是故意的：重启后清零，第一次 cron 就能正常拉起
+UNM_WATCH_STAMP="/tmp/unblockneteasemusic.watch"
 UNM_DIR="/etc/storage/unblockneteasemusic"
 # 证书相关文件的实际路径由 unm_resolve_cert_paths 按 wyybin_cert 计算，
 # 这里只给默认值兜底（命令分发前一定会先调用一次）。
@@ -26,6 +28,37 @@ unm_getip() {
 	ip=$(nvram get lan_ipaddr)
 	[ -z "$ip" ] && ip=$(ip -4 addr show br0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
 	echo "$ip"
+}
+
+# ---------------------------------------------------------------------------
+# 守护 crontab 的增删
+#   为什么不用 /sbin/check_crontab.sh：它只认 /usr/bin/<脚本名> 这种调用形式，
+#   而且只增不删，服务关掉后那行还留着，每 5 分钟醒来白白 fork 一次。
+#   这里自己管一行带标记的规则，加和删都幂等。
+#   crond 每 60 秒重新读一次 crontabs 目录，所以增删都不需要重启 crond。
+# ---------------------------------------------------------------------------
+UNM_CRON_TAG="#unblockneteasemusic-watch"
+UNM_CRON_FILE="/etc/storage/cron/crontabs/admin"
+
+unm_cron_add() {
+	mkdir -p /etc/storage/cron/crontabs 2>/dev/null
+	[ -f "$UNM_CRON_FILE" ] || : >"$UNM_CRON_FILE"
+	if grep -q "$UNM_CRON_TAG" "$UNM_CRON_FILE" 2>/dev/null; then
+		return 0
+	fi
+	echo "*/5 * * * * /usr/bin/unblockneteasemusic.sh watch >/dev/null 2>&1 $UNM_CRON_TAG" >>"$UNM_CRON_FILE"
+	chmod 600 "$UNM_CRON_FILE" 2>/dev/null
+	logger -t "网易云解锁" "已加入守护任务（每 5 分钟检查一次）"
+}
+
+unm_cron_del() {
+	[ -f "$UNM_CRON_FILE" ] || return 0
+	if grep -q "$UNM_CRON_TAG" "$UNM_CRON_FILE" 2>/dev/null; then
+		grep -v "$UNM_CRON_TAG" "$UNM_CRON_FILE" >"$UNM_CRON_FILE.unm"
+		cat "$UNM_CRON_FILE.unm" >"$UNM_CRON_FILE"
+		rm -f "$UNM_CRON_FILE.unm"
+		logger -t "网易云解锁" "已移除守护任务"
+	fi
 }
 
 # 停止服务：先按 pid 文件优雅退出，再用进程名兜底，最后清理 DNS 劫持。
@@ -52,6 +85,9 @@ unm_stop() {
 	done
 
 	unm_unhook_dns
+	# 守护任务跟着服务一起走：服务停了还留着一行 cron，
+	# 只会每 5 分钟把已经关掉的服务又拉起来，与用户的意图相反。
+	unm_cron_del
 }
 
 # 证书目录由页面的一个输入框（nvram: wyybin_cert）决定，默认就是
@@ -424,7 +460,7 @@ unm_filter_sources() {
 }
 
 unm_start() {
-	local port sslport source mode extra ip args pid ms
+	local port sslport source mode extra ip args pid ms unm_forward
 
 	if [ ! -x "$UNM_BIN" ]; then
 		logger -t "网易云解锁" "错误：找不到可执行文件 $UNM_BIN"
@@ -444,10 +480,15 @@ unm_start() {
 
 	[ -z "$port" ] && port=5200
 	[ -z "$sslport" ] && sslport=5201
-	# 音源默认值 pyncmd:kuwo：pyncmd 用网易 songId 直接换地址、不猜原唱，
-	# 覆盖不到的歌（实测约 17%）再落到酷我换源。老的 wyybin_source 值原样保留，
-	# 所以升级固件不会改掉用户已经选好的音源。
-	[ -z "$source" ] && source=pyncmd:kuwo
+	# 音源默认值：pyncmd + 三家换源。
+	#   排序意图不是「挨个试」，上游是**并发**搜索所有音源再按匹配分择优，
+	#   顺序只影响同分时的取舍，所以这里把命中率最高的放前面。
+	#   pyncmd 用网易 songId 直接换地址、不猜原唱，是最稳的一条；
+	#   剩下三家补它覆盖不到的（实测约 17%），任一家挂了不影响其它家。
+	# 单独一家 pyncmd 时，那个第三方 API（music-api.gdstudio.xyz）一超时
+	# 整首歌就没了，这是之前「时好时坏」的直接原因，多源就是为了消掉它。
+	# 老的 wyybin_source 值原样保留，所以升级固件不会改掉用户已经选好的音源。
+	[ -z "$source" ] && source=pyncmd:kuwo:kugou:migu
 	[ -z "$mode" ] && mode=0
 
 	# 配置里只写了换源音源（升级前保存的旧值）时，自动在队首补上 pyncmd，
@@ -464,15 +505,37 @@ unm_start() {
 	# QQ 音源默认不启用（见 unm_filter_sources）。过滤放在补 pyncmd 之后，
 	# 保证用户选的顺序不变，只是把 qq 这一项摘掉。
 	source=$(unm_filter_sources "$source")
-	[ -z "$source" ] && source=pyncmd
+	[ -z "$source" ] && source=pyncmd:kuwo:kugou:migu
+
+	# 运行模式：0=纯代理（客户端手工指代理），1=转发模式（本脚本自己写 DNS 劫持）
+	# 上游的 mode=1 会自己去改 /etc/hosts，与系统自身的记录互相覆盖，所以**永远不让
+	# 上游看到 1**：进程一律以 -m 0 启动，转发模式由下面的 unm_hook_dns 用 dnsmasq
+	# 规则实现。这里只把 wyybin_mode 归一化成内部用的转发开关。
+	case "$mode" in
+		1|2) unm_forward=1 ;;
+		*) unm_forward=0 ;;
+	esac
+	if [ "$unm_forward" = "1" ] && [ "$mode" != "1" ]; then
+		logger -t "网易云解锁" "转发模式取值范围为 0/1，忽略 wyybin_mode=$mode 并按 0（纯代理）运行"
+		unm_forward=0
+	fi
 
 	# 上游参数：-a 监听地址 -p HTTP 端口 -sp HTTPS 端口 -o 音源
 	#           -c/-k 证书 -m 运行模式 -l 日志文件
 	#           -ms 最低匹配分（低于此分的搜索结果一律丢弃，宁缺勿错）
-	# 注意：mode 固定为 0（API/代理）。上游的 mode=1 会自己去改 /etc/hosts，
-	#       与系统自身的记录互相覆盖；域名劫持改由本脚本写 dnsmasq 配置完成，
-	#       只影响经 dnsmasq/SmartDNS 的查询，不会产生全局 hosts 副作用。
+	# -m 固定传 0：见上面的说明，上游的 hosts 劫持一律关掉，劫持由本脚本负责。
 	args="-a 0.0.0.0 -p $port -sp $sslport -o $source -m 0 -l $UNM_LOG"
+
+	# pyncmd 的代理路由（见 config.resolveProxy）：
+	#   页面留空 → 程序自己探测本机 7890/1080 等端口，探到就走代理（6s 超时），
+	#              探不到就走直连（20s 超时）。实测代理下 0.5~1.1s，直连 1.2~3.3s
+	#              但会偶发挂到 17.9s，所以「有代理就用」是明显更优的默认。
+	#   填 none  → 强制直连
+	#   填地址   → 用该地址，形如 http://127.0.0.1:7890
+	proxy=$(nvram get wyybin_proxy)
+	if [ -n "$proxy" ]; then
+		args="$args -proxy $proxy"
+	fi
 
 	# -wl 把每个请求和响应正文都打进日志，单条几 KB 到几十 KB，放开了写
 	# 十几分钟就能把 /tmp（内存盘）填满，进而拖垮 smartdns、dnsmasq 这些
@@ -564,9 +627,13 @@ unm_start() {
 
 	logger -t "网易云解锁" "启动成功，HTTP $port / HTTPS $sslport，音源 $source"
 
-	# mode=1 为转发模式：把音乐域名指向本机，客户端无需任何设置
+	# 进程活着才装守护：这里失败（进程秒退）说明根本起不来，
+	# 挂上 cron 也只会每 5 分钟重试一次崩溃，还会把日志刷爆。
+	unm_cron_add
+
+	# 转发模式：把音乐域名指向本机，客户端无需任何设置
 	ip=$(unm_getip)
-	if [ "$mode" = "1" ] || [ "$mode" = "2" ]; then
+	if [ "$unm_forward" = "1" ]; then
 		unm_hook_dns "$ip"
 	fi
 
@@ -591,6 +658,44 @@ status)
 	else
 		echo "stopped"
 	fi
+	;;
+watch)
+	# 守护入口，由 crontab 每 5 分钟调一次（见 unm_cron_add）。
+	# 只做一件事：该在的时候不在，就拉起来。
+	#
+	# 为什么需要它：上游曾有一个真实的并发缺陷 —— provider.resolveSong 里
+	# 多个 goroutine 同时往同一个 map 写 musicQuality，Go 抛
+	# "fatal error: concurrent map read and map write" 后进程当场退出，
+	# 且**不可恢复**（recover 抓不住 fatal error）。现在该写入已在
+	# provider.go 的 buildSearchSong 里删掉（见 README「已知问题」），
+	# 但守护仍然保留：这个 Go 二进制跑在 128MB 的 MT7621 上，
+	# 内存耗尽或上游 API 行为变化同样会让进程消失，而系统 watchdog
+	# 只管硬件、管不到用户态进程。
+	#
+	# 三道保护，缺一不可：
+	#   1) 总开关关闭时立即返回，别在用户主动关服务后还反复拉起
+	#   2) 5 分钟冷却：崩溃后重启需要时间，避免 cron 在启动过程中重复拉起
+	#   3) 只认「进程不在」，不做端口探测 —— 探测本身要发请求，
+	#      会把崩溃日志搅浑，而且进程活着但慢的时候容易被误杀重拉
+	if [ "$(nvram get wyybin_enable)" != "1" ]; then
+		exit 0
+	fi
+	if pidof UnblockNeteaseMusic >/dev/null 2>&1; then
+		exit 0
+	fi
+	if [ -f "$UNM_WATCH_STAMP" ]; then
+		last=$(date +%s)
+		prev=$(cat "$UNM_WATCH_STAMP" 2>/dev/null)
+		case "$prev" in
+			''|*[!0-9]*) prev=0 ;;
+		esac
+		if [ $((last - prev)) -lt 300 ]; then
+			exit 0
+		fi
+	fi
+	date +%s >"$UNM_WATCH_STAMP"
+	logger -t "网易云解锁" "守护检测到进程已退出，正在重新拉起"
+	unm_start
 	;;
 cert)
 	# 输出生效的证书目录与状态，页面「证书状态」用
@@ -631,7 +736,7 @@ regen)
 	fi
 	;;
 *)
-	echo "Usage: $0 {start|stop|restart|status|cert|regen}"
+	echo "Usage: $0 {start|stop|restart|status|watch|cert|regen}"
 	exit 1
 	;;
 esac

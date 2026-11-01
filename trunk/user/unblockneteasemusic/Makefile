@@ -11,7 +11,8 @@ UNM_URL := https://github.com/cnsilvan/UnblockNeteaseMusic/archive/$(UNM_COMMIT)
 # 本地适配补丁（按文件名顺序应用）：
 #   0001 路由分发重写 + 解锁链路修复（音质选档、翻唱阈值、证书失败不退出、eapi 容错、
 #        provider 初始化顺序、HostDomain 兜底等），详见 README.md
-#   0002 上述修复的回归测试
+#   0002 多音源稳定性（并发写 map 崩溃、pyncmd 代理与超时、定时器重置），详见 README.md
+# 两个补丁按顺序叠加：0002 是基于 0001 应用后的文件做的 diff，单独打会失败。
 # 源码目录永远是「干净解包 + 打这两个补丁」，补丁一旦有变重新解包即可，
 # 不要在解包目录里裸改代码。
 UNM_PATCHES := $(sort $(wildcard $(CURDIR)/patches/*.patch))
@@ -44,15 +45,41 @@ extract_test:
 # 打补丁。用 --dry-run 探一次：能干净打到 → 说明还是未打过补丁的原始解包，
 # 正式应用；打不上 → 认为已经打过（或已被改动），跳过，
 # 这样 make 重复执行不会报错，也不会把补丁打第二遍。
+#
+# 但「打不上」不等于「已经打过」：补丁本身写坏、上游换了源码，都会走到同一分支，
+# 于是坏补丁被静默跳过、编出不含修复的二进制，而日志里看不出任何异常
+# （2026-11-01 就是这么发出过一版）。所以用 .rej 把两种情况分开：
+#   - 解包目录里存在 .rej → 之前某个补丁真的打崩了，直接 fail
+#   - 补丁打不上且没留下 .rej → 才算「已经打过」，跳过
+# 注意：用 find 数个数，配合 [ -gt 0 ] 判断。不要写成
+#   if ! find DIR -name '*.rej' -print -quit | grep -q .
+# 本机 dash 上「! + 管道 + grep -q」组合会判反（有 .rej 也走 else 分支），
+# 换成 [ "$n" -gt 0 ] 就没这个坑，结果也更好读。
+UNM_REJ_COUNT = $$(find $(THISDIR)/$(UNM_SRC) -name '*.rej' 2>/dev/null | wc -l)
+
 patch_test:
-	( for p in $(UNM_PATCHES) ; do \
+	@set -e ; \
+	if [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
+		echo "ERROR: $(UNM_SRC) 里有未处理的 .rej，补丁打崩了。删掉该目录重编" ; \
+		find $(THISDIR)/$(UNM_SRC) -name '*.rej' ; \
+		exit 1 ; \
+	fi ; \
+	for p in $(UNM_PATCHES) ; do \
 		if patch -p1 -d $(THISDIR)/$(UNM_SRC) --dry-run -s -f -i $$p >/dev/null 2>&1 ; then \
 			echo "Applying patch $$(basename $$p)" ; \
-			patch -p1 -d $(THISDIR)/$(UNM_SRC) -s -i $$p || exit 1 ; \
+			patch -p1 -d $(THISDIR)/$(UNM_SRC) -s -i $$p ; \
+			if [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
+				echo "ERROR: patch $$(basename $$p) 留下了 .rej，补丁打崩了" ; \
+				find $(THISDIR)/$(UNM_SRC) -name '*.rej' ; \
+				exit 1 ; \
+			fi ; \
+		elif [ $(UNM_REJ_COUNT) -gt 0 ] ; then \
+			echo "ERROR: patch $$(basename $$p) 有 hunk 打不上，见上面 .rej 日志" ; \
+			exit 1 ; \
 		else \
 			echo "Patch $$(basename $$p) already applied, skip" ; \
 		fi ; \
-	done )
+	done
 
 # 三条硬约束（都是真机试出来的，别改回去）：
 #
