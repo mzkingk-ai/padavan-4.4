@@ -988,6 +988,13 @@
 			{"wyybin_extra", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_minscore", "", NULL, EVM_RESTART_WYYBIN},
 			{"wyybin_cert", "", NULL, EVM_RESTART_WYYBIN|EVM_BLOCK_UNSAFE},
+			// 下面两项不是 nvram 键，只在「恢复默认配置」那一次提交里出现：
+			// 复位时表单里只剩隐藏域，页面靠它们告诉 start_apply.htm
+			// 「这次不是普通保存，去调 wyybin_cert 的复位分支」。
+			// event_mask 给 0，因为没有任何服务需要为它们重启 ——
+			// 真正的停/启由 unblockneteasemusic.sh resetdefault 自己收尾。
+			{"wyybin_cert_exec", "", NULL, 0},
+			{"wyybin_cert_action", "", NULL, 0},
 			// 下面是开关型参数。注意第二列 longname 不是"默认值"：
 			// struct variable 的定义是 {name, longname, argv, event_mask}，
 			// 提交时只取 name 去 nvram_set()，longname 只在列表型控件里被

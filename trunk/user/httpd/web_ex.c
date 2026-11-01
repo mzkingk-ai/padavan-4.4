@@ -2340,6 +2340,12 @@ static int wyybin_status_hook(int eid, webs_t wp, int argc, char **argv)
  *
  * 走 start_apply.htm 而不是 apply.cgi：apply.cgi 只认 action_mode，
  * 这个页面需要把证书状态原样回传给 AJAX 调用者。
+ *
+ * 除了下面四个 action_mode，这个 hook 还会被 start_apply.htm 用同名参数
+ * 调一次（见 start_apply.htm 的 unm_action_mode 判断）；「恢复默认配置」
+ * 走的就是这条路：页面把 action_mode 留空（留空 update_variables_ex 才
+ * 不会把表单值写进 nvram），改用 wyybin_cert_exec=1 让 start_apply.htm
+ * 叫到本 hook，动作名放在 wyybin_cert_action 里由下面读取。
  */
 static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 {
@@ -2359,6 +2365,54 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 			*--e = 0;
 	}
 	int regen = (!strcmp(action_mode, "RegenCertWYYBIN"));
+	/*
+	 * ResetDefaultsWYYBIN：恢复默认配置。
+	 *
+	 * 这个动作**改 nvram**，所以不能走 update.cgi 让用户直接选它：
+	 * 复位必须在一个「能保证不会同时把表单其它字段写进 nvram」的入口里做。
+	 * 页面 unm_reset_defaults() 已经把除隐藏域外的所有控件 disable 掉，
+	 * 并且把 action_mode 留空（留空 update_variables_ex 才什么都不写），
+	 * 改用 wyybin_cert_exec=1 触发本 hook；动作名放在
+	 * wyybin_cert_action 里由这里读。
+	 */
+	int reset_defaults;
+	char *exec_flag = websGetVar(wp, "wyybin_cert_exec", "");
+
+	if (!strcmp(exec_flag, "1") &&
+	    !strcmp(websGetVar(wp, "wyybin_cert_action", ""), "ResetDefaultsWYYBIN"))
+		reset_defaults = 1;
+	else
+		reset_defaults = 0;
+	/*
+	 * AppliedWYYBIN：普通「应用」之后的按需重启。
+	 *
+	 * 为什么需要单独一个动作：一个很隐蔽的坑 ——
+	 * update_variables_ex() 的 " Restart " 分支要求 group_id 指向一个
+	 * 真实变量并且它当前值 > 0，才肯置 restart_needed_bits：
+	 *
+	 *     for (v = GetVariables(sid); v->name != NULL; ++v)
+	 *             if (!strcmp(v->name, group_id)) break;
+	 *     if (v->name && nvram_get_int(group_id) > 0)
+	 *             restart_needed_bits |= (v->event_mask & ~EVM_BLOCK_UNSAFE);
+	 *
+	 * 本页不需要分组列表，group_id 一直是空串，于是 v->name 走到表尾的
+	 * NULL，条件恒假，restart_needed_bits 恒为 0，notify_services() 直接
+	 * 返回。表现就是：nvram 里 wyybin_enable 已经从 1 改成 0（值确实写
+	 * 进去了，页面上也是「已关闭」），但进程一直没被停，状态栏永远是
+	 * 「运行中」。而且不是每次都错 —— 只要同一次提交里还有别的字段
+	 * 变了（端口、音源、开关等），validate_asp_apply() 就会把 event_mask
+	 * 置上，重启随之发生，于是这个问题只在「只翻了总开关」时暴露。
+	 *
+	 * 修复不改动通用的 Restart 语义（别的页面依赖它），而是在本页提交
+	 * 后显式调一次 restart_wyybin()：它内部 eval 脚本 stop/start，
+	 * start 里自带 wyybin_enable == 1 的判断，所以关掉时就是纯 stop。
+	 * 代价是每次「应用」都重启一次进程 —— 这正是本页其余字段本来就
+	 * 需要的效果，语义上反而更准确。
+	 */
+	int applied;
+	char *cert_action = websGetVar(wp, "wyybin_cert_action", "");
+
+	applied = (!strcmp(cert_action, "AppliedWYYBIN"));
 	int sid;
 	/*
 	 * 脚本输出就是 OK|dir / END= / SUBJ= / FILES= 四行，FILES 那一行
@@ -2368,6 +2422,36 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 	char buf[2048];
 	FILE *f;
 	size_t n = 0;
+
+	/* 恢复默认配置会清掉用户的设置，属于危险操作，必须登录态 */
+	if (reset_defaults && !get_login_safe()) {
+		websWrite(wp, "ERR|未登录或登录已过期\n");
+		return 0;
+	}
+
+	/*
+	 * 按需重启：不产出模板输出，只发一条 rc 通知就返回。
+	 * rc 收到 RCN_RESTART_WYY 后调 restart_wyybin()（stop + start），
+	 * start_wyybin() 内部自带 wyybin_enable == 1 的判断，所以关掉
+	 * 总开关时就是一次纯 stop。返回值是纯文本，页面不看内容，
+	 * 保留 OK| 前缀只为了便于排查。
+	 */
+	if (applied) {
+		if (!get_login_safe()) {
+			websWrite(wp, "ERR|未登录或登录已过期\n");
+			return 0;
+		}
+		/*
+		 * 用 notify_rc 而不是直接调 restart_wyybin()：
+		 * httpd 没有 include rc.h（它只 include notify_rc.h），
+		 * 而且重启本来就应该交给 rc 去做 —— 由 init 收到 SIGUSR1 后
+		 * 在 rc.c 里调 restart_wyybin()，与页面保存时走的
+		 * notify_services() 是同一个入口，行为一致。
+		 */
+		notify_rc(RCN_RESTART_WYY);
+		websWrite(wp, "OK|已通知 rc 按新配置重启服务\n");
+		return 0;
+	}
 
 	/* 未登录时不允许改证书。这里查 wyybin_cert 变量的
 	   EVM_BLOCK_UNSAFE 位（variables.c 里与 EVM_RESTART_WYYBIN 一起设置），
@@ -2384,8 +2468,11 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 		}
 	}
 
-	f = popen(regen ? "/usr/bin/unblockneteasemusic.sh regen"
-	                : "/usr/bin/unblockneteasemusic.sh cert", "r");
+	if (reset_defaults)
+		f = popen("/usr/bin/unblockneteasemusic.sh resetdefault", "r");
+	else
+		f = popen(regen ? "/usr/bin/unblockneteasemusic.sh regen"
+		                : "/usr/bin/unblockneteasemusic.sh cert", "r");
 	if (!f) {
 		websWrite(wp, "ERR|无法执行 unblockneteasemusic.sh\n");
 		return 0;
@@ -2400,6 +2487,105 @@ static int wyybin_cert_hook(int eid, webs_t wp, int argc, char **argv)
 	}
 	buf[n] = 0;
 	pclose(f);
+
+	if (n == 0)
+		websWrite(wp, "ERR|脚本没有输出（服务未安装？）\n");
+	else
+		websWrite(wp, "%s", buf);
+
+	return 0;
+}
+
+/*
+ * 切换证书目录前的预检与迁移（页面 unm_cert_dir_prepare 用）。
+ *
+ * 需求是：用户把「证书目录」改到别处时，先看那个目录里有没有证书，
+ * 没有就把默认目录那套拷过去，**再**改配置。顺序必须是这个 ——
+ * 反过来先保存路径的话，中间只要有一次服务重启（notify_services 立刻
+ * restart_wyybin），脚本就会对着空目录现场生成一套新 CA，
+ * 客户端之前装的 ca.crt 当场失效，而且没有任何提示。
+ *
+ * 页面把输入框里的新目录放在 cert_dir 里提交到这里；
+ * 这个 hook 只读不写 nvram，返回值决定页面是否继续保存。
+ */
+static int wyybin_prepcert_hook(int eid, webs_t wp, int argc, char **argv)
+{
+	char *dir = websGetVar(wp, "cert_dir", "");
+	const char *out = "/tmp/.unm_prepcert.out";
+	char cmd[512];
+	char buf[1024];
+	FILE *f;
+	size_t n = 0;
+
+	if (!get_login_safe()) {
+		websWrite(wp, "ERR|未登录或登录已过期\n");
+		return 0;
+	}
+
+	/*
+	 * 路径由用户输入，直接拼进 shell 命令要防注入。
+	 * 证书目录的字符集本来就很窄，含空白/引号/分号/* 之类的一律拒绝，
+	 * 比在 C 里做转义更不容易出错。
+	 */
+	{
+		const char *p;
+		for (p = dir; *p; p++) {
+			if (*p == '\'' || *p == '"' || *p == '`' || *p == '$' ||
+			    *p == ';' || *p == '&' || *p == '|' || *p == '<' ||
+			    *p == '>' || *p == '(' || *p == ')' || *p == '*' ||
+			    *p == '?' || *p == '\\' || *p == ' ' || *p == '\t' ||
+			    *p == '\n') {
+				websWrite(wp, "ERR|目录名含非法字符，只能是字母、数字和 / . _ - 之类\n");
+				return 0;
+			}
+		}
+	}
+
+	/*
+	 * 输出重定向到文件再由 C 读回，而不是用 popen 的管道：
+	 * 这里既要拿到脚本的返回值（决定页面是否继续保存），
+	 * 又要拿到它的输出，popen 只能二选一。
+	 */
+	snprintf(cmd, sizeof(cmd),
+	         "/usr/bin/unblockneteasemusic.sh prepcert '%s' >%s 2>&1",
+	         dir, out);
+	if (system(cmd) != 0) {
+		/* 失败也要把脚本说的原因读出来给用户看 */
+		f = fopen(out, "r");
+		if (f) {
+			while (n < sizeof(buf) - 1) {
+				int c = fgetc(f);
+				if (c == EOF)
+					break;
+				buf[n++] = (char)c;
+			}
+			buf[n] = 0;
+			fclose(f);
+		}
+		unlink(out);
+		if (n) {
+			websWrite(wp, "%s", buf);
+			/* 脚本已经用 ERR| 开头，这里补一句让页面明确中止 */
+			if (strncmp(buf, "ERR|", 4))
+				websWrite(wp, "ERR|迁移证书失败\n");
+		} else {
+			websWrite(wp, "ERR|迁移证书失败（脚本无输出）\n");
+		}
+		return 0;
+	}
+
+	f = fopen(out, "r");
+	if (f) {
+		while (n < sizeof(buf) - 1) {
+			int c = fgetc(f);
+			if (c == EOF)
+				break;
+			buf[n++] = (char)c;
+		}
+		buf[n] = 0;
+		fclose(f);
+	}
+	unlink(out);
 
 	if (n == 0)
 		websWrite(wp, "ERR|脚本没有输出（服务未安装？）\n");
@@ -4671,8 +4857,11 @@ struct ej_handler ej_handlers[] =
 #endif
 #if defined (APP_WYYBIN)
 	{ "wyybin_status", wyybin_status_hook},
-	/* 只读：检查证书；regen：按已保存的路径重签 */
+	/* 只读：检查证书；regen：按已保存的路径重签；
+	   ResetDefaultsWYYBIN：恢复出厂配置（含证书目录） */
 	{ "wyybin_cert", wyybin_cert_hook},
+	/* 切换证书目录前先迁移证书，只读 nvram，不保存 */
+	{ "wyybin_prepcert", wyybin_prepcert_hook},
 #endif
 #if defined (APP_FRP)
 	{ "frpc_status", frpc_status_hook},
