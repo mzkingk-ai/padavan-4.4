@@ -1,93 +1,416 @@
 name: build
 
-on: 
-#  push:
-#    branches:
-#    - "*"
+# 三件事，一个文件搞定：
+#   1. star / push：点一次 Star，或往 main 推一次代码，就自动构建一轮默认机型
+#            （RM2100 + NEWIFI3），产物发布到 Release，版本号 = 构建日期（Asia/Shanghai，如 v20261102）。
+#   2. 手动：在 Actions 页面用**下拉菜单**选机型（不用手打机型名），
+#            手动构建出来的包默认只留 artifact，不发布 Release（除非显式勾选）。
+#   3. 本地：同一份 build-padavan.sh，脚本就在仓库根目录，本地执行方式见该脚本头注释。
+#
+# 说明：
+#   - 构建命令统一走 build-padavan.sh（模板 sed 裁剪 → make → 归档），
+#     不要在 CI 里直接 `make <PRODUCT>`，那样会跳过裁剪步骤。
+#   - 下拉菜单的机型清单与 trunk/configs/templates/*.config 一一对应；
+#     prepare 步骤会再按仓库真实模板校验一遍，前端选项若过期会明确报错而不是静默失败。
+#   - Go 固定 1.22：go1.23+ 编出来的 mipsel 程序在 MT7621 上会 SIGSEGV。
+#   - 产物路径由脚本写入 $GITHUB_OUTPUT，upload/release 步骤直接读取，不需要 glob 猜测。
+
+on:
+  # 点 Star 触发。只在"新增 Star"时构建，取消 Star 不触发。
+  watch:
+    types: [started]
+
+  # 每次 push 也构建一次（默认批次 RM2100 + NEWIFI3，并发布 Release）。
+  # 只监听 main：其他分支的推送不会触发，避免开发分支把版本号撞到同一个日期 tag 上。
+  # tags 只匹配本工作流自己发的 v* tag（release 步骤用 GITHUB_TOKEN 推 tag 不会再次触发），
+  # 这样后续再往 main 推代码时，v* tag 的事件不会造成重复构建。
+  push:
+    branches: [main]
+    tags:
+      - 'v[0-9]+*'
+
   workflow_dispatch:
     inputs:
       target:
+        description: '要构建的机型（默认批次 = RM2100 + NEWIFI3）'
         type: choice
-        description: 'Please select the model to compile'
+        required: false
+        default: 'default'
         options:
-        - 'B70'
-        - 'BELL-A040WQ'
-        - 'CR660x'
-        - 'DIR-878'
-        - 'DIR-882'
-        - 'EA7500'
-        - 'E8820V2'
-        - 'GHL'
-        - 'JCG-836PRO'
-        - 'JCG-AC860M'
-        - 'JCG-Q20-PB'
-        - 'JCG-Q20'
-        - 'JCG-Y2'
-        - 'K2P-USB'
-        - 'K2P-NANO'
-        - 'K2P'
-        - 'MI-4'
-        - 'MI-R3G'
-        - 'MI-R3P-PB'
-        - 'MI-R3P-SPI'
-        - 'MI-R3P'
-        - 'MI-R4A'
-        - 'MR2600'
-        - 'MSG1500'
-        - 'MSG1500-Z'
-        - 'NETGEAR-BZV'
-        - 'NEWIFI'
-        - 'NEWIFI3'
-        - 'QM-B1'
-        - 'R2100'
-        - 'R6800'
-        - 'RE-CP-02'
-        - 'RM2100'
-        - 'RT-AC85P'
-        - 'TX1801'
-        - 'WR1200JS'
-        - 'XY-C1'
-        - 'ZTE-E8820S'
-        - 'WE410443-TC'
-        default: 'K2P'
+          # ── 默认批次 ──
+          - 'default'
+          # ── 小米 / Redmi ──
+          - 'RM2100'
+          - 'R2100'
+          - 'MI-4'
+          - 'MI-R3G'
+          - 'MI-R3P'
+          - 'MI-R3P-PB'
+          - 'MI-R3P-SPI'
+          - 'MI-R4A'
+          - 'CR660x'
+          # ── 新路由 / 联发科白牌 ──
+          - 'NEWIFI3'
+          - 'NEWIFI'
+          - 'NX18Plus'
+          - 'JCG-836PRO'
+          - 'JCG-AC860M'
+          - 'JCG-Q10Pro'
+          - 'JCG-Q10Pro-PB'
+          - 'JCG-Q11Pro'
+          - 'JCG-Q20'
+          - 'JCG-Q20-PB'
+          - 'JCG-Y2'
+          - 'JDCLOUD-RE-CP-02'
+          - 'JDCLOUD-RE-SP-01B'
+          - '360-T6M'
+          - '360-T6M-PB'
+          - 'ZTE-E8820S'
+          - 'ZTE-E8820V2'
+          - 'MSG1500'
+          - 'MSG1500-Z'
+          - 'SIM-AX1800T'
+          - 'TX1801'
+          - 'XY-C1'
+          - 'QM-B1'
+          - 'KOMI-A8'
+          - 'MAIPU-MPAX18'
+          - 'G-AX1800'
+          - 'G-AX1800-B'
+          - 'EW1800GX-Pro'
+          - 'HAR-20S2U1'
+          - 'WIA3300-10'
+          - 'WE410443-TC'
+          - 'WRL18M4GD'
+          - 'C-Life-XG1'
+          - 'BELL-A040WQ'
+          # ── 斐讯 / 极路由 / 友华 / 联想等 ──
+          - 'K2P'
+          - 'K2P-NANO'
+          - 'K2P-USB'
+          - 'B70'
+          - 'GHL'
+          - 'WR1200JS'
+          - 'DIR-878'
+          - 'DIR-882'
+          - 'EA7500'
+          - 'MR2600'
+          - 'RT-AC85P'
+          - 'NETGEAR-BZV'
+          - 'NETGEAR-R6800'
+          - 'NETGEAR-R7450'
+          - 'ZTT-RX6000'
       release:
+        description: '手动构建是否也发布到 Release（默认不发布）'
         type: boolean
-        description: 'upload to release'
-        default: 'true'
+        default: false
+
+# 同一组（默认批次 / 某个机型）不并发，避免两轮构建互相覆盖 .config 与 images/
+concurrency:
+  group: build-${{ inputs.target || 'default' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # 固定时区：版本号、产物文件名、Release 名称都按北京时间
+  TZ: Asia/Shanghai
+  # 默认构建批次：点 Star，或手动选择 default 时走这里
+  DEFAULT_PRODUCTS: 'RM2100 NEWIFI3'
+  # 构建脚本内部也依赖 CI，这里显式声明，防止 runner 侧变量缺失
+  CI: 'true'
+
 jobs:
-  build:
-    name: ${{ inputs.target }}
+  # ── 1. 解析本次要构建哪些机型，以及这次要不要发 Release ──
+  prepare:
+    name: prepare
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      # true = 默认批次（点 Star 触发，或手动选择 default）
+      is_default: ${{ steps.plan.outputs.is_default }}
+      # 最终决定：是否发布 Release
+      do_release: ${{ steps.plan.outputs.do_release }}
+      # Release 版本号与 tag：构建日期，如 20261102 / v20261102
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      release_name: ${{ steps.plan.outputs.release_name }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: hendrikmuhs/ccache-action@v1.2.3
-      - uses: actions/setup-go@v3
+      # 只需要模板清单来校验下拉选项，检出这一步很快
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          go-version: '^1.19.2'
-      - uses: actions/cache@v3
+          fetch-depth: 1
+
+      - name: Plan build
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REQUESTED: ${{ inputs.target }}
+          WANT_RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+
+          # 今天的日期（TZ=Asia/Shanghai 已在 env 中设置）
+          VERSION="$(date +%Y%m%d)"
+          RELEASE_NAME="Padavan 固件 $(date +%Y-%m-%d)"
+
+          # 下拉菜单选中的值（default = 默认批次）
+          REQUESTED="${REQUESTED:-}"
+          if [ "$REQUESTED" = "default" ] || [ "$REQUESTED" = "default+" ]; then
+            REQUESTED=""
+          fi
+
+          # 目标列表：手动选择的优先，否则用默认批次
+          TARGETS="${REQUESTED}"
+          IS_DEFAULT=false
+          if [ -z "${TARGETS// /}" ]; then
+            TARGETS="$DEFAULT_PRODUCTS"
+            IS_DEFAULT=true
+          fi
+
+          # 校验机型名：必须与仓库里真实存在的模板严格一致。
+          # 下拉选项是静态列表，若某机型模板被删/改名，这里会明确报错，而不是编到一半失败。
+          MATRIX=""
+          for p in $TARGETS; do
+            if ! printf '%s' "$p" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+              echo "::error::机型名不合法: $p"; exit 1
+            fi
+            if [ ! -f "trunk/configs/templates/${p}.config" ]; then
+              echo "::error::仓库里没有 ${p} 的模板（trunk/configs/templates/${p}.config）"
+              exit 1
+            fi
+            case ",$MATRIX," in
+              *",\"$p\","*) continue ;;
+            esac
+            MATRIX="${MATRIX:+$MATRIX,}\"$p\""
+          done
+          if [ -z "$MATRIX" ]; then
+            echo "::error::没有解析出任何机型"; exit 1
+          fi
+          MATRIX="{\"product\":[$MATRIX]}"
+
+          # 发布策略（这是本次需求的关键约束）：
+          #   push / star 触发         → 默认批次 + 发布
+          #   手动 + 选择 default      → 默认批次 + 发布（等价于点一次默认构建）
+          #   手动 + 选择某个机型      → 只留 artifact，**不发布**（除非显式勾选 release）
+          DO_RELEASE=false
+          if [ "$EVENT" = "watch" ] || [ "$EVENT" = "push" ]; then
+            DO_RELEASE=true
+          elif [ "$IS_DEFAULT" = "true" ]; then
+            DO_RELEASE=true
+          elif [ "$WANT_RELEASE" = "true" ]; then
+            DO_RELEASE=true
+          fi
+
+          echo "event=$EVENT requested='${REQUESTED}' is_default=$IS_DEFAULT do_release=$DO_RELEASE"
+          echo "matrix=$MATRIX"
+          echo "version=$VERSION tag=v$VERSION release_name=$RELEASE_NAME"
+
+          {
+            echo "matrix=$MATRIX"
+            echo "is_default=$IS_DEFAULT"
+            echo "do_release=$DO_RELEASE"
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "release_name=$RELEASE_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### 构建计划"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 触发方式 | ${{ github.event_name }} |"
+            echo "| 机型 | ${{ steps.plan.outputs.matrix }} |"
+            echo "| 默认批次 | ${{ steps.plan.outputs.is_default }} |"
+            echo "| 发布 Release | **${{ steps.plan.outputs.do_release }}** |"
+            echo "| 版本 | ${{ steps.plan.outputs.tag }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 2. 逐机型构建 ──
+  build:
+    name: ${{ matrix.product }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 安装构建依赖。build-padavan.sh 在 CI 下不会自行 apt，缺什么会明确报错。
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get -y install --no-install-recommends \
+            build-essential gcc g++ make cmake \
+            bc ccache perl bison flex gawk \
+            unzip zip curl wget rsync git \
+            libtool-bin gperf gettext automake autopoint texinfo help2man \
+            pkg-config zlib1g-dev libgmp-dev libmpc-dev libmpfr-dev \
+            libncurses-dev libltdl-dev libssl-dev xz-utils \
+            ca-certificates python3-docutils \
+            fakeroot cpio scons intltool nano
+          ccache --version | head -1
+
+      # Go 必须固定 1.22：go1.23+ 的 mipsel 产物在 MT7621 上启动即 SIGSEGV
+      - name: Setup Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.12'
+          cache: false
+
+      - name: Show Go version
+        run: go version && command -v go
+
+      # ccache：决定第二次构建是 3 分钟还是 20 分钟
+      # 注意：actions/cache 的 path 不过 shell，`~` 不会展开，必须写绝对路径
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.ccache
+          key: ccache-${{ runner.os }}-${{ matrix.product }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.product }}-
+            ccache-${{ runner.os }}-
+
+      # Go 模块缓存：只有开启 xray/v2ray/网易云解锁等 Go 包时才会用到
+      - name: Cache go modules
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-v1
+            /home/runner/go/pkg/mod
+            /home/runner/.cache/go-build
+          key: gomod-${{ runner.os }}-${{ hashFiles('trunk/user/*/Makefile', 'trunk/user/*/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
-      - name: Prepare environment
-        run: |
-          sudo apt update
-          sudo apt install libtool-bin gperf python3-docutils autopoint gettext ccache
-      - name: Start Build
-        run: |
-          make ${{ inputs.target }}
-          echo "TAG_ANME=$(date +%Y%m%d)" >> $GITHUB_ENV
-      - uses: actions/upload-artifact@v3
+            gomod-${{ runner.os }}-
+
+      # 工具链与 SSP stub：体积小，直接缓存，省掉每次 14MB 下载与打补丁。
+      # 使用脚本默认的 $GITHUB_WORKSPACE/toolchain-mipsel（缓存库会把它转成相对路径）。
+      - name: Cache toolchain
+        id: tc
+        uses: actions/cache@v4
         with:
-          name: ${{ inputs.target }}-${{ env.TAG_ANME }}
-          path: trunk/images/*.trx
-      - uses: ncipollo/release-action@v1
-        if: github.event.inputs.release == 'true'
+          path: toolchain-mipsel/toolchain-4.4.x
+          key: toolchain-${{ runner.os }}-hanwckf-linux-4.4-v1.0-ssp
+
+      - name: Build with build-padavan.sh
+        id: build
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+          CCACHE_MAXSIZE: 1G
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          # 脚本会自己：检查/下载工具链 → 生成 .config → 模板裁剪 → make → 归档到 images/
+          ./build-padavan.sh "${{ matrix.product }}"
+
+      - name: Show artifact info
+        run: |
+          {
+            echo "### ${{ matrix.product }}"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 文件 | \`$(basename "${{ steps.build.outputs.trx }}")\` |"
+            echo "| 大小 | $(du -h "${{ steps.build.outputs.trx }}" | cut -f1) |"
+            echo "| SHA256 | \`${{ steps.build.outputs.sha256 }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          commit: ${{ github.sha }}
-          tag: Padavan
-          artifacts: trunk/images/*.trx
-          allowUpdates: true
+          name: ${{ steps.build.outputs.trx_name }}
+          path: ${{ steps.build.outputs.trx }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # 整份归档目录也留一份，方便一次下载同一批次的全部固件
+      - name: Upload all-built images
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ steps.build.outputs.trx_name }}
+          path: images/*.trx
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── 3. 发布 Release（版本号 = 构建日期）──
+  # 只在 prepare 判定需要发布时才跑；手动指定机型构建默认不会到这里。
+  release:
+    name: release ${{ needs.prepare.outputs.tag }}
+    needs: [prepare, build]
+    if: needs.prepare.outputs.do_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*.trx'
+          merge-multiple: true
+
+      - name: Check artifacts
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          n=$(find dist -name '*.trx' -type f | wc -l)
+          echo "共 $n 个固件"
+          # 失败构建会被 matrix 的 fail-fast=false 保住，但缺包必须是硬错误
+          [ "$n" -ge 1 ] || { echo "::error::没有可发布的固件"; exit 1; }
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- *.trx | tee SHA256SUMS.txt
+
+      # 以构建日期为 tag 创建/更新 Release。
+      # 同一天点多次 Star / 多次构建时，用 --clobber 覆盖同名产物而不是失败。
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          NAME: ${{ needs.prepare.outputs.release_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          NOTES="Padavan 固件构建 ${VERSION}（北京时间）
+
+          源码提交：\`${SHA}\`
+          构建方式：仓库根目录 \`build-padavan.sh\`（模板裁剪 → make → 归档）
+          工具链：hanwckf/padavan-toolchain linux-4.4-v1.0（gcc 7.4.0）
+          Go：1.22.12（go1.23+ 在 MT7621 上会 SIGSEGV）
+
+          > 刷机前请先备份 nvram 配置与 /etc/storage。"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，追加/覆盖 ${VERSION} 的产物"
+            gh release edit "$TAG" --title "$NAME"
+            gh release upload "$TAG" dist/*.trx dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" dist/*.trx dist/SHA256SUMS.txt \
+              --title "$NAME" \
+              --notes "$NOTES" \
+              --target "$SHA"
+          fi
+
+      - name: Release summary
+        run: |
+          {
+            echo "### Release ${{ needs.prepare.outputs.tag }}"
+            echo ""
+            echo "已发布到：https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
+            echo ""
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
