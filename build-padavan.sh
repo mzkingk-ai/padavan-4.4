@@ -222,6 +222,12 @@ check_toolchain() {
     gcc_ver="$("$TOOLCHAIN_GCC" --version 2>&1 | head -1)"
     info "工具链: $gcc_ver"
 
+    # 修复工具链权限（CI 中来自 cache 可能只读）
+    if ! touch "$TOOLCHAIN_CACHE/toolchain-4.4.x" 2>/dev/null; then
+        warn "工具链目录权限受限，尝试修复..."
+        chmod -R u+w "$TOOLCHAIN_CACHE" 2>/dev/null || true
+    fi
+    
     # 仓库内创建 toolchain-mipsel → $TOOLCHAIN_CACHE 的 symlink
     local repo_tc="$BUILD_DIR/toolchain-mipsel"
     if [ ! -L "$repo_tc" ] && [ ! -d "$repo_tc/toolchain-4.4.x/bin" ]; then
@@ -250,9 +256,13 @@ setup_ssp_stubs() {
     fi
     warn "创建 SSP stub 库（工具链 --disable-libssp）..."
     if ! mkdir -p "$sysroot/lib" 2>/dev/null; then
-        # CI 中工具链解压在 $GITHUB_WORKSPACE 下，属主是 runner，无需 sudo
-        err "无法写入 sysroot: $sysroot/lib"
-        return 1
+        # GitHub Actions 中工具链来自 cache，可能权限受限
+        # 尝试用 chmod 修复权限，而不是直接失败
+        chmod -R u+w "$sysroot" 2>/dev/null || true
+        if ! mkdir -p "$sysroot/lib" 2>/dev/null; then
+            err "无法写入 sysroot: $sysroot/lib"
+            return 1
+        fi
     fi
     local tmpd
     tmpd="$(mktemp -d)"
