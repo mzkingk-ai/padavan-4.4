@@ -1,8 +1,13 @@
 name: build
 
 # 三件事，一个文件搞定：
-#   1. star / push：点一次 Star，或往 main 推一次代码，就自动构建一轮默认机型
-#            （RM2100 + NEWIFI3），产物发布到 Release，版本号 = 构建日期（Asia/Shanghai，如 v20261102）。
+#   1. star：点一次 Star，就自动构建一轮默认机型（RM2100 + NEWIFI3），
+#            产物发布到 Release，版本号 = 构建日期（Asia/Shanghai，如 v20261102）。
+#
+#      注：这里不再响应 push。往 main 推代码会构建的话，每次改 README 都会触发
+#      两轮各 20 分钟以上的构建，并覆盖当天的 Release；而且 push 事件来自 fork 的
+#      原作者 vb1980 仓库的 tag 时会被 GitHub 直接拒绝。
+#      推送后要构建，走下面的「手动」或在 Actions 页点 Run workflow。
 #   2. 手动：在 Actions 页面用**下拉菜单**选机型（不用手打机型名），
 #            手动构建出来的包默认只留 artifact，不发布 Release（除非显式勾选）。
 #   3. 本地：同一份 build-padavan.sh，脚本就在仓库根目录，本地执行方式见该脚本头注释。
@@ -19,15 +24,6 @@ on:
   # 点 Star 触发。只在"新增 Star"时构建，取消 Star 不触发。
   watch:
     types: [started]
-
-  # 每次 push 也构建一次（默认批次 RM2100 + NEWIFI3，并发布 Release）。
-  # 只监听 main：其他分支的推送不会触发，避免开发分支把版本号撞到同一个日期 tag 上。
-  # tags 只匹配本工作流自己发的 v* tag（release 步骤用 GITHUB_TOKEN 推 tag 不会再次触发），
-  # 这样后续再往 main 推代码时，v* tag 的事件不会造成重复构建。
-  push:
-    branches: [main]
-    tags:
-      - 'v[0-9]+*'
 
   workflow_dispatch:
     inputs:
@@ -139,7 +135,7 @@ jobs:
     steps:
       # 只需要模板清单来校验下拉选项，检出这一步很快
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
@@ -192,11 +188,11 @@ jobs:
           MATRIX="{\"product\":[$MATRIX]}"
 
           # 发布策略（这是本次需求的关键约束）：
-          #   push / star 触发         → 默认批次 + 发布
+          #   star 触发                → 默认批次 + 发布
           #   手动 + 选择 default      → 默认批次 + 发布（等价于点一次默认构建）
           #   手动 + 选择某个机型      → 只留 artifact，**不发布**（除非显式勾选 release）
           DO_RELEASE=false
-          if [ "$EVENT" = "watch" ] || [ "$EVENT" = "push" ]; then
+          if [ "$EVENT" = "watch" ]; then
             DO_RELEASE=true
           elif [ "$IS_DEFAULT" = "true" ]; then
             DO_RELEASE=true
@@ -242,7 +238,7 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
@@ -264,7 +260,7 @@ jobs:
 
       # Go 必须固定 1.22：go1.23+ 的 mipsel 产物在 MT7621 上启动即 SIGSEGV
       - name: Setup Go 1.22
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.22.12'
           cache: false
@@ -275,7 +271,7 @@ jobs:
       # ccache：决定第二次构建是 3 分钟还是 20 分钟
       # 注意：actions/cache 的 path 不过 shell，`~` 不会展开，必须写绝对路径
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/runner/.ccache
           key: ccache-${{ runner.os }}-${{ matrix.product }}-${{ github.sha }}
@@ -285,7 +281,7 @@ jobs:
 
       # Go 模块缓存：只有开启 xray/v2ray/网易云解锁等 Go 包时才会用到
       - name: Cache go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -298,7 +294,7 @@ jobs:
       # 使用脚本默认的 $GITHUB_WORKSPACE/toolchain-mipsel（缓存库会把它转成相对路径）。
       - name: Cache toolchain
         id: tc
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: toolchain-mipsel/toolchain-4.4.x
           key: toolchain-${{ runner.os }}-hanwckf-linux-4.4-v1.0-ssp
@@ -327,7 +323,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.trx_name }}
           path: ${{ steps.build.outputs.trx }}
@@ -336,7 +332,7 @@ jobs:
 
       # 整份归档目录也留一份，方便一次下载同一批次的全部固件
       - name: Upload all-built images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: images-${{ steps.build.outputs.trx_name }}
           path: images/*.trx
@@ -352,7 +348,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: '*.trx'

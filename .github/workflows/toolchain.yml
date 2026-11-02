@@ -8,7 +8,7 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Prepare environment
         run: |
           sudo apt update
@@ -21,7 +21,7 @@ jobs:
           make toolchain/build
           cd toolchain-mipsel/toolchain-4.4.x
           tar cJf ../mipsel-linux-uclibc-gcc10.tar.xz *
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v7
         with:
           name: toolchain
           path: toolchain-mipsel/mipsel-linux-uclibc-gcc10.tar.xz
