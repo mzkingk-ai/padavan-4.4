@@ -244,35 +244,100 @@ check_toolchain() {
 # ============================================================
 setup_ssp_stubs() {
     title "SSP stub 检查"
-    local sysroot="$TOOLCHAIN_CACHE/toolchain-4.4.x/mipsel-linux-uclibc/sysroot"
+    local tc="$TOOLCHAIN_CACHE/toolchain-4.4.x"
+    local sysroot="$tc/mipsel-linux-uclibc/sysroot"
     local gcc="$TOOLCHAIN_GCC"
-    local ar="$TOOLCHAIN_CACHE/toolchain-4.4.x/bin/mipsel-linux-uclibc-ar"
-    local nm="$TOOLCHAIN_CACHE/toolchain-4.4.x/bin/mipsel-linux-uclibc-nm"
+    local ar="$tc/bin/mipsel-linux-uclibc-ar"
+    local nm="$tc/bin/mipsel-linux-uclibc-nm"
+    local -a targets=(lib libssp_nonshared.a)
+    local t
 
+    # ── 1. 工具链是否完整 ──
+    # 本地实测最容易出问题的是 `/opt/toolchain-mipsel -> ~/padavan/toolchain-mipsel`
+    # 这类**悬空**软链：软链能建成功，但指向不存在，后面所有写入都失败。
+    # 这里对每个路径检查 -e 而不是 -L/-d，悬空软链会被直接判为「不存在」。
+    if [ ! -f "$gcc" ] || [ ! -f "$ar" ] || [ ! -f "$nm" ] || [ ! -d "$sysroot" ]; then
+        err "工具链不完整: gcc/ar/nm 或 sysroot 缺失"
+        echo "      期望: $gcc" >&2
+        echo "            $ar" >&2
+        echo "            $nm" >&2
+        echo "            $sysroot" >&2
+        if [ -L "$TOOLCHAIN_CACHE" ] || [ -L "/opt/toolchain-mipsel" ]; then
+            echo "      提示: 检测到 toolchain 相关软链，若为悬空软链请重建:" >&2
+            [ -L "$TOOLCHAIN_CACHE" ] && ls -l "$TOOLCHAIN_CACHE" >&2
+            [ -L "/opt/toolchain-mipsel" ] && ls -l /opt/toolchain-mipsel >&2
+        fi
+        echo "      处理: 删除 $TOOLCHAIN_CACHE 后重跑（脚本会自动下载并解压），" >&2
+        echo "            或执行 TOOLCHAIN_CACHE=/已解压的/toolchain-mipsel 重新运行" >&2
+        return 1
+    fi
+
+    # ── 2. stub 已存在则跳过 ──
     if [ -f "$sysroot/lib/libssp_nonshared.a" ] && \
        "$nm" "$sysroot/lib/libssp_nonshared.a" 2>/dev/null | grep -q "__stack_chk_guard"; then
         info "SSP stubs 已存在，跳过"
         return 0
     fi
+
+    # ── 3. 校验写入能力（关键修复）──
+    # 旧写法用 `mkdir -p` 的返回值判断可写性，这是错的：目录已存在时
+    # mkdir -p 对不可写目录也返回 0，于是直接放行，真正失败发生在后面
+    # 的 `ar rcs`，报错是「无法写入 sysroot」且看不出原因。
+    # 改为对每个目标文件真正试写一次。
     warn "创建 SSP stub 库（工具链 --disable-libssp）..."
-    if ! mkdir -p "$sysroot/lib" 2>/dev/null; then
-        # GitHub Actions 中工具链来自 cache，可能权限受限
-        # 尝试用 chmod 修复权限，而不是直接失败
-        chmod -R u+w "$sysroot" 2>/dev/null || true
-        if ! mkdir -p "$sysroot/lib" 2>/dev/null; then
-            err "无法写入 sysroot: $sysroot/lib"
-            return 1
+    for t in "${targets[@]}"; do
+        if ! (: > "$sysroot/$t.tmp") 2>/dev/null; then
+            warn "sysroot 不可写: $sysroot（$t）"
+            # GitHub Actions 若把工具链按 :ro 挂进容器，chmod 无能为力，
+            # 必须先发现并给出可执行的解法，而不是静默 chmod 后继续失败。
+            # 用 awk 精确比对挂载点与选项（grep 正则里 $6 含括号，容易误判）。
+            if mount | awk -v p="$sysroot" '
+                    $3 == p {
+                        n = split($6, a, ",")
+                        sub(/^\(/, "", a[1])
+                        for (i = 1; i <= n; i++) {
+                            gsub(/\)/, "", a[i])
+                            if (a[i] == "ro") { found = 1; exit }
+                        }
+                    }
+                    END { exit !found }'; then
+                err "$sysroot 处于只读挂载（ro），chmod 无效"
+                echo "      处理: 把 runner 上 cache 恢复目录改成可写（不要用 :ro 挂载），" >&2
+                echo "            或删除 .github/workflows/build.yml 中 'Cache toolchain' 步骤后重跑" >&2
+                return 1
+            fi
+            if find "$sysroot" ! -w -print -quit 2>/dev/null | grep -q .; then
+                chmod -R u+w "$sysroot" 2>/dev/null || true
+            fi
+            : > "$sysroot/$t.tmp" 2>/dev/null || {
+                err "无法写入 sysroot: $sysroot/lib"
+                echo "      处理: rm -rf $TOOLCHAIN_CACHE 后重跑（会重新下载工具链）" >&2
+                return 1
+            }
         fi
-    fi
+        rm -f "$sysroot/$t.tmp"
+    done
+
+    # ── 4. 生成 stub ──
     local tmpd
     tmpd="$(mktemp -d)"
     cat > "$tmpd/ssp_stub.c" << 'EOF'
 void __stack_chk_fail(void) { while(1); }
 unsigned long __stack_chk_guard = 0;
 EOF
-    "$gcc" -c -o "$tmpd/ssp_stub.o" "$tmpd/ssp_stub.c"
-    "$ar" rcs "$sysroot/lib/libssp_nonshared.a" "$tmpd/ssp_stub.o"
-    "$ar" rcs "$sysroot/lib/libssp.a" "$tmpd/ssp_stub.o"
+    if ! "$gcc" -c -o "$tmpd/ssp_stub.o" "$tmpd/ssp_stub.c"; then
+        err "编译 ssp_stub.o 失败（工具链无法运行）"
+        rm -rf "$tmpd"
+        return 1
+    fi
+    # gcc 原来虽然 --disable-libssp，但程序里仍可能引用这两个符号；
+    # 用真二进制的 ar 打包，静态库没有索引，链接器按文件名逐个取用即可。
+    if ! { "$ar" rcs "$sysroot/lib/libssp_nonshared.a" "$tmpd/ssp_stub.o" && \
+           "$ar" rcs "$sysroot/lib/libssp.a" "$tmpd/ssp_stub.o"; }; then
+        err "写入 SSP stub 静态库失败: $sysroot/lib"
+        rm -rf "$tmpd"
+        return 1
+    fi
     rm -rf "$tmpd"
     info "SSP stubs 创建完成"
 }
